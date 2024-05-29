@@ -1,0 +1,11 @@
+[package]
+name = "misasim"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+bio = "1.6.0"
+clap = { version = "4.5.4", features = ["derive"] }
+eyre = "0.6.12"
+itertools = "0.13.0"
+rand = "0.8.5"
