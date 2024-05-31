@@ -27,8 +27,12 @@ pub enum Commands {
     },
 
     /// Simulate a collapse.
-    /// Requires a repetitive sequence.
-    Collapse,
+    Collapse {
+        /// Length in bp to collapse.
+        /// Requires a repetitive sequence of this length or more in the input.
+        #[arg(short, long)]
+        length: usize
+    },
 
     FalseDuplication {
         /// Length in bp to duplicate.
