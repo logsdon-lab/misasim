@@ -1,5 +1,6 @@
 use bio::io::fasta::{FastaRead, Reader, Records};
 use clap::{CommandFactory, Parser};
+use itertools::Itertools;
 use std::io::{stdin, BufRead, BufReader};
 use std::path::PathBuf;
 use std::{fs::File, io::IsTerminal};
@@ -9,6 +10,7 @@ mod cli;
 
 use cli::{Cli, Commands};
 
+#[derive(Debug, PartialEq, Eq)]
 struct Repeat<'a> {
     seq: &'a str,
     start: usize,
@@ -25,7 +27,6 @@ fn find_repeats<'a>(stbl: &'a SuffixTable, min_len: usize) -> Vec<Repeat<'a>> {
         let curr_sfx_len = curr_sfx.len();
 
         if let Some((sfx, sfx_pos)) = prev_sfx {
-
             // Does current suffix start with this suffix?
             if !curr_sfx.starts_with(sfx) {
                 prev_sfx = Some((curr_sfx, 0));
@@ -45,13 +46,16 @@ fn find_repeats<'a>(stbl: &'a SuffixTable, min_len: usize) -> Vec<Repeat<'a>> {
             };
 
             if *next_sfx == sfx {
+                // TODO: Incorrect count with intermediate sequence.
                 if let Some(repeat) = prev_repeat.as_mut() {
                     repeat.count += 1;
                 } else {
                     prev_repeat = Some(Repeat {
                         seq: sfx,
                         // Calculate the start of the repeat. If overflows, means idx is already at the start.
-                        start: (*idx as usize).checked_sub(prev_sfx_len).unwrap_or(*idx as usize),
+                        start: (*idx as usize)
+                            .checked_sub(prev_sfx_len)
+                            .unwrap_or(*idx as usize),
                         count: 2,
                     });
                 }
@@ -59,7 +63,6 @@ fn find_repeats<'a>(stbl: &'a SuffixTable, min_len: usize) -> Vec<Repeat<'a>> {
                 continue;
             }
             prev_sfx = Some((sfx, sfx_end));
-
         } else {
             if curr_sfx_len < min_len {
                 continue;
@@ -76,14 +79,44 @@ fn generate_misjoin(seq: &str) -> eyre::Result<String> {
     Ok(new_seq)
 }
 
-fn generate_collapse(
-    seq: &str,
-    repeats: &[Repeat],
-    num_repeats: usize,
-) -> eyre::Result<String> {
-    let mut new_seq = String::new();
+fn generate_collapse(seq: &str, repeats: &[Repeat], num_repeats: usize) -> eyre::Result<String> {
+    let mut new_seq: String = String::with_capacity(seq.len());
 
-    for repeat in repeats {}
+    let mut sorted_repeats = repeats
+        .iter()
+        .sorted_by(|a, b| a.start.cmp(&b.start))
+        .peekable();
+
+    // Iterate thru intervals to construct slices.
+    let mut i = 0;
+    while let Some(repeat) = sorted_repeats.next() {
+        println!("Current: {repeat:?}");
+        let (start, stop) = (
+            repeat.start,
+            repeat.start + (repeat.seq.len() * repeat.count),
+        );
+        // Add starting sequence before the repeat.
+        new_seq.push_str(seq.get(i..start).unwrap_or_default());
+
+        // Collapse the repeat.
+        new_seq.push_str(repeat.seq);
+
+        // Add the remaining repeats if num_repeats less than repeat count.
+        let remaining_repeats = seq
+            .get(stop - (repeat.seq.len() * repeat.count.saturating_sub(num_repeats))..stop)
+            .unwrap_or_default();
+
+        new_seq.push_str(remaining_repeats);
+
+        println!("Interval: {start} - {stop}");
+        if let Some(next_repeat) = sorted_repeats.peek() {
+            println!("Next: {next_repeat:?}");
+        } else {
+        }
+
+        i = stop;
+    }
+
     Ok(new_seq)
 }
 
@@ -114,7 +147,7 @@ fn generate_misassemblies<B: BufRead>(
             }
             cli::Commands::FalseDuplication { length, number } => {
                 println!("False duplication with length: {}", length);
-            },
+            }
             cli::Commands::Gap { length, number } => {
                 println!("Gap with length: {}", length);
             }
@@ -128,7 +161,7 @@ fn main() -> eyre::Result<()> {
     let (file, cmd) = if std::env::var("DEBUG").map_or(false, |v| v == "1" || v == "true") {
         let cmd = Commands::Collapse {
             length: 5,
-            num_repeats: 2,
+            num_repeats: 1,
         };
         let file = PathBuf::from("test/data/test.fa");
         (file, cmd)
@@ -163,11 +196,83 @@ mod tests {
 
     #[test]
     fn test_find_repeats() {
+        let seq = "ATTTTATTTT";
+        let stbl = SuffixTable::new(seq);
+        println!("{stbl:?}");
+
+        let repeats = find_repeats(&stbl, 5);
+
+        assert_eq!(
+            [Repeat {
+                seq: "ATTTT",
+                start: 0,
+                count: 2
+            }],
+            repeats.as_slice()
+        );
+    }
+
+    #[test]
+    fn test_find_repeats_overlap() {
+        let seq = "ATTTTATTTTA";
+        let stbl = SuffixTable::new(seq);
+        println!("{stbl:?}");
+
+        let repeats = find_repeats(&stbl, 5);
+
+        unimplemented!()
+    }
+
+    #[test]
+    fn test_find_repeats_multiple() {
         let seq = "ATTTTATTTTAATTTTAATTTTAATTTT";
         let stbl = SuffixTable::new(seq);
         println!("{stbl:?}");
 
         let repeats = find_repeats(&stbl, 5);
-        assert!(repeats.len() == 2);
+        assert_eq!(
+            [
+                Repeat {
+                    seq: "AATTTT",
+                    start: 10,
+                    count: 3
+                },
+                Repeat {
+                    seq: "ATTTT",
+                    start: 0,
+                    count: 2
+                }
+            ],
+            repeats.as_slice()
+        );
+    }
+
+    #[test]
+    fn test_generate_collapse() {
+        let seq = "ATTTTATTTT";
+        let stbl = SuffixTable::new(seq);
+        let repeats = find_repeats(&stbl, 5);
+        let new_seq = generate_collapse(seq, &repeats, 20).unwrap();
+
+        assert_eq!("ATTTT", new_seq);
+    }
+
+    #[test]
+    fn test_generate_collapse_multiple() {
+        let seq = "ATTTTATTTTAATTTTAATTTTAATTTT";
+        let stbl = SuffixTable::new(seq);
+        let repeats = find_repeats(&stbl, 5);
+        let new_seq = generate_collapse(seq, &repeats, 20).unwrap();
+
+        assert_eq!("ATTTTAATTTT", new_seq);
+    }
+
+    #[test]
+    fn test_generate_collapse_interm_seq() {
+        let seq = "ATTTTATTTTGCCGAATTTTAATTTTAATTTT";
+        let stbl = SuffixTable::new(seq);
+        let repeats = find_repeats(&stbl, 5);
+        let new_seq = generate_collapse(seq, &repeats, 20).unwrap();
+        unimplemented!()
     }
 }

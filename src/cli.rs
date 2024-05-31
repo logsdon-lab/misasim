@@ -66,5 +66,5 @@ pub enum Commands {
         /// Number of gaps to simulate.
         #[arg(short, long)]
         number: usize,
-    }
+    },
 }
