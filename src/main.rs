@@ -1,10 +1,13 @@
-use bio::io::fasta::{FastaRead, Reader, Records};
-use clap::{CommandFactory, Parser};
 use itertools::Itertools;
-use std::io::{stdin, BufRead, BufReader};
-use std::path::PathBuf;
-use std::{fs::File, io::IsTerminal};
 use suffix::SuffixTable;
+use clap::{CommandFactory, Parser};
+use noodles::fasta::{reader::Records, Reader};
+
+use std::{
+    path::PathBuf,
+    fs::File, io::IsTerminal,
+    io::{stdin, BufRead, BufReader}
+};
 
 mod cli;
 
@@ -24,12 +27,13 @@ fn find_repeats<'a>(stbl: &'a SuffixTable, min_len: usize) -> Vec<Repeat<'a>> {
 
     for (num, idx) in stbl.table().iter().enumerate() {
         let curr_sfx = stbl.suffix(num);
-        let curr_sfx_len = curr_sfx.len();
 
         if let Some((sfx, sfx_pos)) = prev_sfx {
             // Does current suffix start with this suffix?
             if !curr_sfx.starts_with(sfx) {
-                prev_sfx = Some((curr_sfx, 0));
+                // Remove prev suffix from current suffix.
+                // This isolates repeated elements
+                prev_sfx = curr_sfx.strip_suffix(sfx).map_or(Some((curr_sfx, 0)), |s| Some((s, 0)));
 
                 if let Some(repeat) = prev_repeat {
                     repeats.push(repeat);
@@ -38,6 +42,11 @@ fn find_repeats<'a>(stbl: &'a SuffixTable, min_len: usize) -> Vec<Repeat<'a>> {
                 continue;
             }
             let prev_sfx_len = sfx.len();
+            // Remove small suffixes.
+            if prev_sfx_len < min_len {
+                prev_sfx = curr_sfx.strip_suffix(sfx).map_or(Some((curr_sfx, 0)), |s| Some((s, 0)));
+                continue;
+            }
             // Check slice ahead.
             let sfx_end = sfx_pos + prev_sfx_len;
             let Some(next_sfx) = &curr_sfx.get(sfx_end..sfx_end + prev_sfx_len) else {
@@ -64,12 +73,14 @@ fn find_repeats<'a>(stbl: &'a SuffixTable, min_len: usize) -> Vec<Repeat<'a>> {
             }
             prev_sfx = Some((sfx, sfx_end));
         } else {
-            if curr_sfx_len < min_len {
-                continue;
-            }
             prev_sfx = Some((curr_sfx, 0));
         }
     }
+
+    if let Some(repeat) = prev_repeat {
+        repeats.push(repeat);
+    }
+
     repeats
 }
 
@@ -132,7 +143,7 @@ fn generate_misassemblies<B: BufRead>(
 ) -> eyre::Result<()> {
     for record in records {
         let record = record?;
-        let seq = std::str::from_utf8(record.seq())?;
+        let seq = std::str::from_utf8(record.sequence().as_ref())?;
         match command {
             cli::Commands::Misjoin { length, number } => {
                 println!("Misjoin with length: {}", length);
@@ -180,11 +191,11 @@ fn main() -> eyre::Result<()> {
         }
 
         let buf_reader = BufReader::new(stdin().lock());
-        let fasta_reader = Reader::new(buf_reader);
+        let mut fasta_reader = Reader::new(buf_reader);
         let results = generate_misassemblies(fasta_reader.records(), cmd);
     } else {
         let buf_reader = BufReader::new(File::open(&file).unwrap());
-        let fasta_reader = Reader::new(buf_reader);
+        let mut fasta_reader = Reader::new(buf_reader);
         let results = generate_misassemblies(fasta_reader.records(), cmd);
     }
     Ok(())
@@ -198,10 +209,7 @@ mod tests {
     fn test_find_repeats() {
         let seq = "ATTTTATTTT";
         let stbl = SuffixTable::new(seq);
-        println!("{stbl:?}");
-
         let repeats = find_repeats(&stbl, 5);
-
         assert_eq!(
             [Repeat {
                 seq: "ATTTT",
@@ -216,19 +224,28 @@ mod tests {
     fn test_find_repeats_overlap() {
         let seq = "ATTTTATTTTA";
         let stbl = SuffixTable::new(seq);
-        println!("{stbl:?}");
-
         let repeats = find_repeats(&stbl, 5);
-
-        unimplemented!()
+        assert_eq!(
+            [
+                Repeat {
+                    seq: "ATTTT",
+                    start: 0,
+                    count: 2
+                },
+                Repeat {
+                    seq: "TTTTA",
+                    start: 1,
+                    count: 2
+                }
+            ],
+            repeats.as_slice(),
+        )
     }
 
     #[test]
     fn test_find_repeats_multiple() {
         let seq = "ATTTTATTTTAATTTTAATTTTAATTTT";
         let stbl = SuffixTable::new(seq);
-        println!("{stbl:?}");
-
         let repeats = find_repeats(&stbl, 5);
         assert_eq!(
             [
@@ -241,6 +258,26 @@ mod tests {
                     seq: "ATTTT",
                     start: 0,
                     count: 2
+                },
+                Repeat {
+                    seq: "TAATTT",
+                    start: 9,
+                    count: 3
+                },
+                Repeat {
+                    seq: "TTAATT",
+                    start: 8,
+                    count: 3
+                },
+                Repeat {
+                    seq: "TTTAAT",
+                    start: 7,
+                    count: 3
+                },
+                Repeat {
+                    seq: "TTTTAA",
+                    start: 6,
+                    count: 3
                 }
             ],
             repeats.as_slice()
@@ -264,7 +301,7 @@ mod tests {
         let repeats = find_repeats(&stbl, 5);
         let new_seq = generate_collapse(seq, &repeats, 20).unwrap();
 
-        assert_eq!("ATTTTAATTTT", new_seq);
+        unimplemented!()
     }
 
     #[test]
