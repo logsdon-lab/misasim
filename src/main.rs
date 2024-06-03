@@ -1,11 +1,9 @@
 use clap::{CommandFactory, Parser};
 use log::{info, LevelFilter};
 use noodles::{
-    bed::{self, record::OptionalFields},
-    core::Position,
+    bed::{self, record::Builder},
     fasta::{self as fasta, reader::Records, record::Sequence},
 };
-use rand::seq::IteratorRandom;
 use simple_logger::SimpleLogger;
 use std::{
     fs::File,
@@ -14,10 +12,12 @@ use std::{
 };
 mod cli;
 mod collapse;
+mod misjoin;
 
 use {
     cli::{Cli, Commands},
     collapse::{find_all_repeats, generate_collapse},
+    misjoin::generate_misjoin,
 };
 
 #[cfg(feature = "parallel")]
@@ -43,8 +43,24 @@ fn generate_misassemblies<B: BufRead, O: Write>(
 
         let seq = std::str::from_utf8(record.sequence().as_ref())?;
         match command {
-            cli::Commands::Misjoin { length, number } => {
-                println!("Misjoin with length: {}", length);
+            cli::Commands::Misjoin { number } => {
+                let misjoined_seq = generate_misjoin(seq, number, seed)?;
+
+                writer_fa.write_record(&fasta::Record::new(
+                    record.definition().clone(),
+                    Sequence::from(misjoined_seq.seq.into_bytes()),
+                ))?;
+
+                let Some(writer_bed) = &mut output_bed else {
+                    continue;
+                };
+                for del_seq in misjoined_seq.del_seqs {
+                    // Add deleted sequence to BED file.
+                    let record = TryInto::<Builder<3>>::try_into(del_seq)?
+                        .set_reference_sequence_name(record_name)
+                        .build()?;
+                    writer_bed.write_record(&record)?;
+                }
             }
             cli::Commands::Collapse {
                 length,
@@ -66,26 +82,23 @@ fn generate_misassemblies<B: BufRead, O: Write>(
                     continue;
                 };
                 for rp in collapsed_seq.repeats {
-                    let record = bed::Record::<3>::builder()
-                        .set_start_position(Position::new(rp.start.clamp(1, usize::MAX)).unwrap())
-                        .set_end_position(
-                            Position::new(rp.start + (rp.seq.len() * rp.count)).unwrap(),
-                        )
+                    let record = Into::<Builder<3>>::into(rp)
                         .set_reference_sequence_name(record_name)
-                        .set_optional_fields(OptionalFields::from(vec![
-                            rp.count.to_string(),
-                            rp.seq,
-                        ]))
                         .build()?;
                     writer_bed.write_record(&record)?;
                 }
             }
             cli::Commands::FalseDuplication { length, number } => {
+                use rand::prelude::*;
+                let mut rng = seed.map_or(StdRng::from_entropy(), StdRng::seed_from_u64);
+                let mut false_dupe_pos = (0..seq.len()).choose_multiple(&mut rng, number);
+                false_dupe_pos.sort();
+
                 println!("False duplication with length: {}", length);
             }
-            cli::Commands::Gap { length, number } => {
-                println!("Gap with length: {}", length);
-            }
+            cli::Commands::Gap { number } => {}
+
+            cli::Commands::Breaks { number } => {}
         }
     }
     Ok(())
@@ -96,10 +109,7 @@ fn main() -> eyre::Result<()> {
 
     let (file, out_fa, out_bed, cmd, seed) =
         if std::env::var("DEBUG").map_or(false, |v| v == "1" || v == "true") {
-            let cmd = Commands::Collapse {
-                length: 6000,
-                num_repeats: 10,
-            };
+            let cmd = Commands::Misjoin { number: 10 };
             let file = PathBuf::from("test/data/HG00171_chr9_haplotype2-0000142.fa");
             let out_fa: Option<PathBuf> = Some(PathBuf::from("output.fa"));
             let out_bed = Some(PathBuf::from("test/data/test.bed"));

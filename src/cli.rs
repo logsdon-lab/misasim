@@ -25,10 +25,6 @@ pub struct Cli {
 pub enum Commands {
     /// Simulate a misjoin in a sequence.
     Misjoin {
-        /// Length in bp to remove.
-        #[arg(short, long)]
-        length: usize,
-
         /// Number of misjoins to simulate.
         #[arg(short, long)]
         number: usize,
@@ -59,11 +55,13 @@ pub enum Commands {
 
     /// Simulate a gap in a sequence.
     Gap {
-        /// Length in bp to insert.
-        #[arg(short, long)]
-        length: usize,
-
         /// Number of gaps to simulate.
+        #[arg(short, long)]
+        number: usize,
+    },
+
+    Breaks {
+        /// Number of breaks to simulate.
         #[arg(short, long)]
         number: usize,
     },

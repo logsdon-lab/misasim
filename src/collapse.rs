@@ -1,10 +1,17 @@
+use core::ops::Range;
+use std::collections::HashSet;
+
 use eyre::OptionExt;
 use iset::IntervalMap;
 use itertools::Itertools;
+use noodles::{
+    bed::{
+        self,
+        record::{Builder, OptionalFields},
+    },
+    core::Position,
+};
 use rand::prelude::*;
-
-use core::ops::Range;
-use std::collections::HashSet;
 
 #[derive(Debug, PartialEq, Eq, Clone, Hash)]
 pub struct Repeat {
@@ -13,9 +20,18 @@ pub struct Repeat {
     pub count: usize,
 }
 
+impl From<Repeat> for Builder<3> {
+    fn from(rp: Repeat) -> Self {
+        bed::Record::<3>::builder()
+            .set_start_position(Position::new(rp.start.clamp(1, usize::MAX)).unwrap())
+            .set_end_position(Position::new(rp.start + (rp.seq.len() * rp.count)).unwrap())
+            .set_optional_fields(OptionalFields::from(vec![rp.count.to_string(), rp.seq]))
+    }
+}
+
 /// Collapsed sequence and their repeats
 // TODO: Add function to reform full sequence.
-#[derive(Debug, Clone)]
+#[derive(Debug, PartialEq, Eq, Clone)]
 pub struct CollapsedSequence {
     pub seq: String,
     pub repeats: Vec<Repeat>,
@@ -314,8 +330,18 @@ mod tests {
         let seq = "ATTTTATTTT";
         let repeats = find_all_repeats(&seq, 5);
         let new_seq = generate_collapse(seq, &repeats, 20, None).unwrap();
-
-        assert_eq!("ATTTT", new_seq.seq);
+        assert_eq!(
+            CollapsedSequence {
+                seq: "ATTTT".to_string(),
+                repeats: [Repeat {
+                    seq: "ATTTT".to_string(),
+                    start: 0,
+                    count: 2
+                }]
+                .to_vec()
+            },
+            new_seq
+        );
     }
 
     #[test]
@@ -324,6 +350,29 @@ mod tests {
         let repeats = find_all_repeats(&seq, 5);
         let new_seq = generate_collapse(seq, &repeats, 4, Some(42)).unwrap();
 
-        assert_eq!("AAAGGCCCGGGGATTTTGGGCCGCCCAATTT", new_seq.seq);
+        assert_eq!(
+            CollapsedSequence {
+                seq: "AAAGGCCCGGGGATTTTGGGCCGCCCAATTT".to_string(),
+                repeats: [
+                    Repeat {
+                        seq: "GGCCC".to_string(),
+                        start: 3,
+                        count: 2
+                    },
+                    Repeat {
+                        seq: "ATTTT".to_string(),
+                        start: 17,
+                        count: 2
+                    },
+                    Repeat {
+                        seq: "AATTT".to_string(),
+                        start: 36,
+                        count: 2
+                    }
+                ]
+                .to_vec()
+            },
+            new_seq
+        );
     }
 }
