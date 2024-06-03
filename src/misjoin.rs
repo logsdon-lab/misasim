@@ -9,43 +9,44 @@ use noodles::{
 use rand::prelude::*;
 
 #[derive(Debug, PartialEq, Eq, Clone)]
-pub struct DeletedSequence<'a> {
+pub struct RemovedSequence<'a> {
     pub start: usize,
     pub end: usize,
     pub seq: &'a str,
 }
 
-impl<'a> TryFrom<DeletedSequence<'a>> for Builder<3> {
+impl<'a> TryFrom<RemovedSequence<'a>> for Builder<3> {
     type Error = eyre::Error;
 
-    fn try_from(del_seq: DeletedSequence) -> Result<Self, eyre::Error> {
+    fn try_from(rem_seq: RemovedSequence) -> Result<Self, eyre::Error> {
         Ok(Record::builder()
-            .set_start_position(Position::new(del_seq.start).context("Zero start position")?)
-            .set_end_position(Position::new(del_seq.end).context("Zero end position")?)
-            .set_optional_fields(OptionalFields::from(vec![del_seq.seq.to_owned()])))
+            .set_start_position(Position::new(rem_seq.start).context("Zero start position")?)
+            .set_end_position(Position::new(rem_seq.end).context("Zero end position")?)
+            .set_optional_fields(OptionalFields::from(vec![rem_seq.seq.to_owned()])))
     }
 }
 
 #[derive(Debug, PartialEq, Eq)]
-pub struct MisjoinedSequence<'a> {
+pub struct DeletedSequence<'a> {
     pub seq: String,
-    pub del_seqs: Vec<DeletedSequence<'a>>,
+    pub removed_seqs: Vec<RemovedSequence<'a>>,
 }
 
 // TODO: Add length. Difficult as may overlap with another. Ignoring for now.
-pub fn generate_misjoin(
+pub fn generate_deletion(
     seq: &str,
-    num_misjoins: usize,
+    number_dels: usize,
+    mask_del: bool,
     seed: Option<u64>,
-) -> eyre::Result<MisjoinedSequence> {
+) -> eyre::Result<DeletedSequence> {
     let mut new_seq = String::with_capacity(seq.len());
-    let mut del_seqs: Vec<DeletedSequence> = Vec::with_capacity(num_misjoins);
+    let mut removed_seqs: Vec<RemovedSequence> = Vec::with_capacity(number_dels);
     let mut rng = seed.map_or(StdRng::from_entropy(), StdRng::seed_from_u64);
-    let mut misjoin_pos = (0..seq.len()).choose_multiple(&mut rng, num_misjoins);
-    misjoin_pos.sort();
+    let mut del_pos = (0..seq.len()).choose_multiple(&mut rng, number_dels);
+    del_pos.sort();
 
-    let bp_dels = misjoin_pos.iter().enumerate().map(|(i, p)| {
-        let (stop_pos, dst) = if let Some(pos) = misjoin_pos.get(i + 1) {
+    let bp_dels = del_pos.iter().enumerate().map(|(i, p)| {
+        let (stop_pos, dst) = if let Some(pos) = del_pos.get(i + 1) {
             (*pos, pos - p)
         } else {
             (seq.len(), seq.len() - p)
@@ -54,26 +55,29 @@ pub fn generate_misjoin(
     });
 
     // Add starting sequence before first position.
-    if let Some(pos) = misjoin_pos.first() {
+    if let Some(pos) = del_pos.first() {
         new_seq.push_str(&seq[..*pos]);
     };
 
-    for (pos, (stop, bp_del)) in misjoin_pos.iter().zip(bp_dels) {
+    for (pos, (stop, bp_del)) in del_pos.iter().zip(bp_dels) {
+        if mask_del {
+            new_seq.push_str(&"N".repeat(bp_del));
+        }
         let remaining_seq = &seq[pos + bp_del..stop];
+        new_seq.push_str(remaining_seq);
 
         let del_start = *pos;
         let del_end = *pos + bp_del;
-        del_seqs.push(DeletedSequence {
+        removed_seqs.push(RemovedSequence {
             start: del_start,
             end: del_end,
             seq: &seq[del_start..del_end],
         });
-        new_seq.push_str(remaining_seq);
     }
 
-    Ok(MisjoinedSequence {
+    Ok(DeletedSequence {
         seq: new_seq,
-        del_seqs,
+        removed_seqs,
     })
 }
 
@@ -84,12 +88,12 @@ mod test {
     #[test]
     fn test_generate_misjoin() {
         let seq = "AAAGGCCCGGCCCGGGGATTTTATTTTGGGCCGCCCAATTTAATTT";
-        let new_seq = generate_misjoin(seq, 1, Some(42)).unwrap();
+        let new_seq = generate_deletion(seq, 1, false, Some(42)).unwrap();
 
         assert_eq!(
-            MisjoinedSequence {
+            DeletedSequence {
                 seq: "AAAGGCCCGGCCCGGGGATTTTAATTT".to_string(),
-                del_seqs: [DeletedSequence {
+                removed_seqs: [RemovedSequence {
                     start: 22,
                     end: 41,
                     seq: "ATTTTGGGCCGCCCAATTT"
@@ -103,23 +107,23 @@ mod test {
     #[test]
     fn test_generate_misjoin_multiple() {
         let seq = "AAAGGCCCGGCCCGGGGATTTTATTTTGGGCCGCCCAATTTAATTT";
-        let new_seq = generate_misjoin(seq, 3, Some(42)).unwrap();
+        let new_seq = generate_deletion(seq, 3, false, Some(42)).unwrap();
 
         assert_eq!(
-            MisjoinedSequence {
+            DeletedSequence {
                 seq: "AAAGGGGATTTTATTTTGGCT".to_string(),
-                del_seqs: [
-                    DeletedSequence {
+                removed_seqs: [
+                    RemovedSequence {
                         start: 4,
                         end: 14,
                         seq: "GCCCGGCCCG"
                     },
-                    DeletedSequence {
+                    RemovedSequence {
                         start: 29,
                         end: 34,
                         seq: "GCCGC"
                     },
-                    DeletedSequence {
+                    RemovedSequence {
                         start: 35,
                         end: 45,
                         seq: "CAATTTAATT"
@@ -129,5 +133,36 @@ mod test {
             },
             new_seq
         );
+    }
+
+    #[test]
+    fn test_generate_gap_multiple() {
+        let seq = "AAAGGCCCGGCCCGGGGATTTTATTTTGGGCCGCCCAATTTAATTT";
+        let new_seq = generate_deletion(seq, 3, true, Some(42)).unwrap();
+
+        assert_eq!(
+            DeletedSequence {
+                seq: "AAAGNNNNNNNNNNGGGATTTTATTTTGGNNNNNCNNNNNNNNNNT".to_string(),
+                removed_seqs: [
+                    RemovedSequence {
+                        start: 4,
+                        end: 14,
+                        seq: "GCCCGGCCCG"
+                    },
+                    RemovedSequence {
+                        start: 29,
+                        end: 34,
+                        seq: "GCCGC"
+                    },
+                    RemovedSequence {
+                        start: 35,
+                        end: 45,
+                        seq: "CAATTTAATT"
+                    }
+                ]
+                .to_vec()
+            },
+            new_seq
+        )
     }
 }

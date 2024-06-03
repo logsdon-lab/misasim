@@ -4,6 +4,9 @@ use clap::{Parser, Subcommand};
 
 #[derive(Parser)]
 pub struct Cli {
+    #[command(subcommand)]
+    pub command: Commands,
+
     /// Input sequence file.
     pub infile: PathBuf,
 
@@ -16,12 +19,9 @@ pub struct Cli {
     /// Seed to use for the random number generator.
     #[arg(short, long)]
     pub seed: Option<u64>,
-
-    #[command(subcommand)]
-    pub command: Commands,
 }
 
-#[derive(Debug, Subcommand)]
+#[derive(Debug, PartialEq, Eq, Subcommand)]
 pub enum Commands {
     /// Simulate a misjoin in a sequence.
     Misjoin {
@@ -60,7 +60,8 @@ pub enum Commands {
         number: usize,
     },
 
-    Breaks {
+    /// Simulate a break in a sequence.
+    Break {
         /// Number of breaks to simulate.
         #[arg(short, long)]
         number: usize,

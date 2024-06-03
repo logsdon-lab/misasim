@@ -17,7 +17,7 @@ mod misjoin;
 use {
     cli::{Cli, Commands},
     collapse::{find_all_repeats, generate_collapse},
-    misjoin::generate_misjoin,
+    misjoin::generate_deletion,
 };
 
 #[cfg(feature = "parallel")]
@@ -43,18 +43,24 @@ fn generate_misassemblies<B: BufRead, O: Write>(
 
         let seq = std::str::from_utf8(record.sequence().as_ref())?;
         match command {
-            cli::Commands::Misjoin { number } => {
-                let misjoined_seq = generate_misjoin(seq, number, seed)?;
+            cli::Commands::Misjoin { number } | cli::Commands::Gap { number } => {
+                let deleted_seq = generate_deletion(
+                    seq,
+                    number,
+                    // If gap, mask deletion.
+                    command == cli::Commands::Gap { number },
+                    seed,
+                )?;
 
                 writer_fa.write_record(&fasta::Record::new(
                     record.definition().clone(),
-                    Sequence::from(misjoined_seq.seq.into_bytes()),
+                    Sequence::from(deleted_seq.seq.into_bytes()),
                 ))?;
 
                 let Some(writer_bed) = &mut output_bed else {
                     continue;
                 };
-                for del_seq in misjoined_seq.del_seqs {
+                for del_seq in deleted_seq.removed_seqs {
                     // Add deleted sequence to BED file.
                     let record = TryInto::<Builder<3>>::try_into(del_seq)?
                         .set_reference_sequence_name(record_name)
@@ -96,9 +102,7 @@ fn generate_misassemblies<B: BufRead, O: Write>(
 
                 println!("False duplication with length: {}", length);
             }
-            cli::Commands::Gap { number } => {}
-
-            cli::Commands::Breaks { number } => {}
+            cli::Commands::Break { number } => {}
         }
     }
     Ok(())
