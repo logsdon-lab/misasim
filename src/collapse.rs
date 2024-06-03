@@ -1,6 +1,9 @@
-use core::ops::Range;
-use iset::{iter::Intervals, IntervalMap};
+use eyre::OptionExt;
+use iset::IntervalMap;
 use itertools::Itertools;
+use rand::prelude::*;
+
+use core::ops::Range;
 use std::collections::HashSet;
 
 #[derive(Debug, PartialEq, Eq, Clone, Hash)]
@@ -94,13 +97,54 @@ pub fn find_repeats(seq: &str, min_len: usize) -> Vec<Repeat> {
     repeats
 }
 
+pub fn flatten_repeats<'a, R: IntoIterator<Item = &'a Repeat>>(
+    seq: &str,
+    repeats: R,
+    rng: &mut StdRng,
+    num_repeats: usize,
+) -> String {
+    let mut new_seq = String::with_capacity(seq.len());
+    // Choose a random number of repeats to collapse
+    let repeats = repeats
+        .into_iter()
+        .sorted_by(|a, b| a.start.cmp(&b.start))
+        .choose_multiple(rng, num_repeats);
+    let mut repeats_iter = repeats.iter().peekable();
+
+    // Get first segment before repeat.
+    if let Some(first_segment) = repeats_iter
+        .peek()
+        .map(|r| seq.get(..r.start))
+        .unwrap_or_default()
+    {
+        new_seq.push_str(first_segment);
+    }
+
+    while let Some(rp) = repeats_iter.next() {
+        let rp_end = rp.start + (rp.seq.len() * rp.count);
+        // Collapse repeat.
+        new_seq.push_str(&rp.seq);
+
+        // Add the segment between this repeat and the next one.
+        let next_rp = repeats_iter.peek();
+        if let Some(next_repeat) = next_rp.and_then(|r| seq.get(rp_end..r.start)) {
+            new_seq.push_str(next_repeat);
+        } else if let Some(last_segment) = seq.get(rp_end..) {
+            new_seq.push_str(last_segment);
+        }
+    }
+
+    new_seq
+}
+
 pub fn generate_collapse(
     seq: &str,
     repeats: &HashSet<Repeat>,
     num_repeats: usize,
+    seed: Option<u64>,
 ) -> eyre::Result<String> {
-    let mut new_seq: String = String::with_capacity(seq.len());
-
+    let mut rng = seed.map_or(StdRng::from_entropy(), StdRng::seed_from_u64);
+    let mut new_seqs: Vec<String> = vec![];
     let intervals: IntervalMap<usize, Repeat> =
         IntervalMap::from_iter(repeats.iter().map(|repeat| {
             let (start, stop) = (
@@ -113,49 +157,68 @@ pub fn generate_collapse(
         .iter(0..seq.len())
         .map(|(range, _)| range)
         .collect();
-    let interval_overlaps: IntervalMap<usize, HashSet<Range<usize>>> =
-        IntervalMap::from_iter(intervals.iter(0..seq.len()).map(|(range, repeat)| {
-            (
-                range.clone(),
-                intervals.intervals(range).collect(),
-            )
-        }));
-    println!("Intervals: {:?}", intervals);
-    println!("All intervals: {:?}", all_intervals);
-    println!("Inteval overlaps: {:?}", interval_overlaps);
+    let interval_overlaps: IntervalMap<usize, HashSet<Range<usize>>> = IntervalMap::from_iter(
+        intervals
+            .iter(0..seq.len())
+            .map(|(range, _)| (range.clone(), intervals.intervals(range).collect())),
+    );
 
     // Iterate thru intervals to construct slices.
-    for (range, repeat) in intervals.iter(0..seq.len()) {
-        println!("Current: {repeat:?} {range:?}");
-        // let (start, end) = (range.start, range.end);
-
-        let complement = interval_overlaps
+    for (range, repeat) in intervals
+        .iter(0..seq.len())
+        // Skip unique, non-overlapping intervals.
+        .filter(|(r, _)| {
+            interval_overlaps
+                .get(r.clone())
+                .map(|i| i.len() != 1)
+                .unwrap_or_default()
+        })
+    {
+        let Some(complement) = interval_overlaps
             .get(range)
-            .map(|rs| all_intervals.difference(rs));
+            .map(|rs| all_intervals.difference(rs))
+        else {
+            continue;
+        };
 
-        println!("Complement: {:?}", complement);
-        // for int in intervals.intervals(range) {
-        //     println!("{:?}", int);
-        // }
+        let new_seq = flatten_repeats(
+            seq,
+            complement
+                .into_iter()
+                .flat_map(|r| intervals.get(r.clone()))
+                .chain(std::iter::once(repeat)),
+            &mut rng,
+            num_repeats,
+        );
 
-        // // Collapse the repeat.
-        // new_seq.push_str(&repeat.seq);
-
-        // // Add the remaining repeats if num_repeats less than repeat count.
-        // let remaining_repeats = seq
-        //     .get(end - (repeat.seq.len() * repeat.count.saturating_sub(num_repeats))..end)
-        //     .unwrap_or_default();
-
-        // new_seq.push_str(remaining_repeats);
+        new_seqs.push(new_seq);
     }
-    // println!("{:?}", intervals);
 
-    Ok(new_seq)
+    // If no non-overlapping intervals, use only unique intervals.
+    if new_seqs.is_empty() {
+        let new_seq = flatten_repeats(
+            seq,
+            intervals.iter(0..seq.len()).map(|(_, r)| r),
+            &mut rng,
+            num_repeats,
+        );
+        new_seqs.push(new_seq);
+    }
+
+    // Choose a random new sequence.
+    new_seqs
+        .choose(&mut rng)
+        .ok_or_eyre("No collapsed sequences can be generated.")
+        .cloned()
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn sort_repeats(repeats: &mut Vec<Repeat>) {
+        repeats.sort_by(|a: &Repeat, b: &Repeat| a.start.cmp(&b.start));
+    }
 
     #[test]
     fn test_find_repeats() {
@@ -174,80 +237,79 @@ mod tests {
     #[test]
     fn test_find_repeats_overlap() {
         let seq = "ATTTTATTTTA";
-        let repeats = find_all_repeats(&seq, 5);
-        assert_eq!(
-            vec![
-                Repeat {
-                    seq: "TTTTA".to_string(),
-                    start: 1,
-                    count: 2
-                },
-                Repeat {
-                    seq: "ATTTT".to_string(),
-                    start: 0,
-                    count: 2
-                }
-            ],
-            repeats.into_iter().collect_vec()
-        );
+        let mut repeats = find_all_repeats(&seq, 5).into_iter().collect_vec();
+        let exp_repeats = vec![
+            Repeat {
+                seq: "ATTTT".to_string(),
+                start: 0,
+                count: 2,
+            },
+            Repeat {
+                seq: "TTTTA".to_string(),
+                start: 1,
+                count: 2,
+            },
+        ];
+        sort_repeats(&mut repeats);
+        assert_eq!(exp_repeats, repeats);
     }
 
     #[test]
     fn test_find_repeats_multiple() {
         let seq = "GCCCCGCCCCAATTTTAATTTTAATTTT";
-        let repeats = find_all_repeats(&seq, 5);
-        assert_eq!(
-            vec![
-                Repeat {
-                    seq: "TAATTT".to_string(),
-                    start: 15,
-                    count: 2
-                },
-                Repeat {
-                    seq: "AATTTT".to_string(),
-                    start: 4,
-                    count: 3
-                },
-                Repeat {
-                    seq: "AATTTT".to_string(),
-                    start: 16,
-                    count: 3
-                },
-                Repeat {
-                    seq: "GCCCC".to_string(),
-                    start: 0,
-                    count: 2
-                },
-                Repeat {
-                    seq: "TTAATT".to_string(),
-                    start: 14,
-                    count: 2
-                },
-                Repeat {
-                    seq: "TTTTAA".to_string(),
-                    start: 12,
-                    count: 2
-                },
-                Repeat {
-                    seq: "ATTTTA".to_string(),
-                    start: 11,
-                    count: 2
-                },
-                Repeat {
-                    seq: "TTTAAT".to_string(),
-                    start: 13,
-                    count: 2
-                }
-            ],
-            repeats.into_iter().collect_vec()
-        )
+        let mut repeats = find_all_repeats(&seq, 5).into_iter().collect_vec();
+        let mut exp_repeats = vec![
+            Repeat {
+                seq: "TAATTT".to_string(),
+                start: 15,
+                count: 2,
+            },
+            Repeat {
+                seq: "AATTTT".to_string(),
+                start: 4,
+                count: 3,
+            },
+            Repeat {
+                seq: "AATTTT".to_string(),
+                start: 16,
+                count: 3,
+            },
+            Repeat {
+                seq: "GCCCC".to_string(),
+                start: 0,
+                count: 2,
+            },
+            Repeat {
+                seq: "TTAATT".to_string(),
+                start: 14,
+                count: 2,
+            },
+            Repeat {
+                seq: "TTTTAA".to_string(),
+                start: 12,
+                count: 2,
+            },
+            Repeat {
+                seq: "ATTTTA".to_string(),
+                start: 11,
+                count: 2,
+            },
+            Repeat {
+                seq: "TTTAAT".to_string(),
+                start: 13,
+                count: 2,
+            },
+        ];
+        sort_repeats(&mut repeats);
+        sort_repeats(&mut exp_repeats);
+        assert_eq!(exp_repeats, exp_repeats)
     }
 
     #[test]
     fn test_generate_collapse() {
         let seq = "ATTTTATTTT";
         let repeats = find_all_repeats(&seq, 5);
-        let new_seq = generate_collapse(seq, &repeats, 20).unwrap();
+        let new_seq = generate_collapse(seq, &repeats, 20, None).unwrap();
 
         assert_eq!("ATTTT", new_seq);
     }
@@ -256,16 +318,8 @@ mod tests {
     fn test_generate_collapse_multiple() {
         let seq = "AAAGGCCCGGCCCGGGGATTTTATTTTGGGCCGCCCAATTTAATTT";
         let repeats = find_all_repeats(&seq, 5);
-        let new_seq = generate_collapse(seq, &repeats, 20).unwrap();
+        let new_seq = generate_collapse(seq, &repeats, 4, Some(42)).unwrap();
 
-        // unimplemented!()
-    }
-
-    #[test]
-    fn test_generate_collapse_interm_seq() {
-        let seq = "ATTTTATTTTGCCGAATTTTAATTTTAATTTT";
-        let repeats = find_all_repeats(&seq, 5);
-        let new_seq = generate_collapse(seq, &repeats, 20).unwrap();
-        unimplemented!()
+        assert_eq!(new_seq, "AAAGGCCCGGGGATTTTGGGCCGCCCAATTT")
     }
 }

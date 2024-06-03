@@ -17,6 +17,7 @@ use {
 
 fn generate_misassemblies<B: BufRead>(
     records: Records<B>,
+    seed: Option<u64>,
     command: cli::Commands,
 ) -> eyre::Result<()> {
     for record in records {
@@ -31,7 +32,7 @@ fn generate_misassemblies<B: BufRead>(
                 num_repeats,
             } => {
                 let repeats = find_all_repeats(seq, length);
-                let seqs = generate_collapse(seq, &repeats, num_repeats);
+                let seqs = generate_collapse(seq, &repeats, num_repeats, seed);
             }
             cli::Commands::FalseDuplication { length, number } => {
                 println!("False duplication with length: {}", length);
@@ -46,18 +47,20 @@ fn generate_misassemblies<B: BufRead>(
 }
 
 fn main() -> eyre::Result<()> {
-    let (file, cmd) = if std::env::var("DEBUG").map_or(false, |v| v == "1" || v == "true") {
+    let (file, cmd, seed) = if std::env::var("DEBUG").map_or(false, |v| v == "1" || v == "true") {
         let cmd = Commands::Collapse {
             length: 5,
             num_repeats: 1,
         };
         let file = PathBuf::from("test/data/test.fa");
-        (file, cmd)
+        let seed = Some(42);
+        (file, cmd, seed)
     } else {
         let cli = Cli::parse();
         let file = cli.infile;
         let cmd = cli.command;
-        (file, cmd)
+        let seed = cli.seed;
+        (file, cmd, seed)
     };
 
     // https://rust-cli.github.io/book/in-depth/machine-communication.html
@@ -69,11 +72,11 @@ fn main() -> eyre::Result<()> {
 
         let buf_reader = BufReader::new(stdin().lock());
         let mut fasta_reader = Reader::new(buf_reader);
-        let results = generate_misassemblies(fasta_reader.records(), cmd);
+        let results = generate_misassemblies(fasta_reader.records(), seed, cmd);
     } else {
         let buf_reader = BufReader::new(File::open(&file).unwrap());
         let mut fasta_reader = Reader::new(buf_reader);
-        let results = generate_misassemblies(fasta_reader.records(), cmd);
+        let results = generate_misassemblies(fasta_reader.records(), seed, cmd);
     }
     Ok(())
 }
