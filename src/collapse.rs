@@ -13,6 +13,14 @@ pub struct Repeat {
     pub count: usize,
 }
 
+/// Collapsed sequence and their repeats
+// TODO: Add function to reform full sequence.
+#[derive(Debug, Clone)]
+pub struct CollapsedSequence {
+    pub seq: String,
+    pub repeats: Vec<Repeat>,
+}
+
 pub fn find_all_repeats(seq: &str, min_len: usize) -> HashSet<Repeat> {
     let rev_seq = seq.chars().rev().collect::<String>();
     let fwd_repeats = find_repeats(seq, min_len);
@@ -97,19 +105,9 @@ pub fn find_repeats(seq: &str, min_len: usize) -> Vec<Repeat> {
     repeats
 }
 
-pub fn flatten_repeats<'a, R: IntoIterator<Item = &'a Repeat>>(
-    seq: &str,
-    repeats: R,
-    rng: &mut StdRng,
-    num_repeats: usize,
-) -> String {
+pub fn flatten_repeats<'a, R: IntoIterator<Item = &'a Repeat>>(seq: &'a str, repeats: R) -> String {
     let mut new_seq = String::with_capacity(seq.len());
-    // Choose a random number of repeats to collapse
-    let repeats = repeats
-        .into_iter()
-        .sorted_by(|a, b| a.start.cmp(&b.start))
-        .choose_multiple(rng, num_repeats);
-    let mut repeats_iter = repeats.iter().peekable();
+    let mut repeats_iter = repeats.into_iter().peekable();
 
     // Get first segment before repeat.
     if let Some(first_segment) = repeats_iter
@@ -142,9 +140,9 @@ pub fn generate_collapse(
     repeats: &HashSet<Repeat>,
     num_repeats: usize,
     seed: Option<u64>,
-) -> eyre::Result<String> {
+) -> eyre::Result<CollapsedSequence> {
     let mut rng = seed.map_or(StdRng::from_entropy(), StdRng::seed_from_u64);
-    let mut new_seqs: Vec<String> = vec![];
+    let mut new_seqs: Vec<CollapsedSequence> = vec![];
     let intervals: IntervalMap<usize, Repeat> =
         IntervalMap::from_iter(repeats.iter().map(|repeat| {
             let (start, stop) = (
@@ -181,35 +179,41 @@ pub fn generate_collapse(
             continue;
         };
 
-        let new_seq = flatten_repeats(
-            seq,
-            complement
-                .into_iter()
-                .flat_map(|r| intervals.get(r.clone()))
-                .chain(std::iter::once(repeat)),
-            &mut rng,
-            num_repeats,
-        );
+        let final_repeats = complement
+            .into_iter()
+            .flat_map(|r| intervals.get(r.clone()))
+            .chain(std::iter::once(repeat))
+            .cloned()
+            .sorted_by(|a, b| a.start.cmp(&b.start))
+            .choose_multiple(&mut rng, num_repeats);
+        let new_seq = flatten_repeats(seq, final_repeats.iter());
 
-        new_seqs.push(new_seq);
+        new_seqs.push(CollapsedSequence {
+            seq: new_seq,
+            repeats: final_repeats,
+        });
     }
 
     // If no non-overlapping intervals, use only unique intervals.
     if new_seqs.is_empty() {
-        let new_seq = flatten_repeats(
-            seq,
-            intervals.iter(0..seq.len()).map(|(_, r)| r),
-            &mut rng,
-            num_repeats,
-        );
-        new_seqs.push(new_seq);
+        let final_repeats = intervals
+            .iter(0..seq.len())
+            .map(|(_, r)| r)
+            .cloned()
+            .sorted_by(|a, b| a.start.cmp(&b.start))
+            .choose_multiple(&mut rng, num_repeats);
+        let new_seq = flatten_repeats(seq, final_repeats.iter());
+        new_seqs.push(CollapsedSequence {
+            seq: new_seq,
+            repeats: final_repeats,
+        });
     }
 
     // Choose a random new sequence.
     new_seqs
+        .into_iter()
         .choose(&mut rng)
         .ok_or_eyre("No collapsed sequences can be generated.")
-        .cloned()
 }
 
 #[cfg(test)]
@@ -311,7 +315,7 @@ mod tests {
         let repeats = find_all_repeats(&seq, 5);
         let new_seq = generate_collapse(seq, &repeats, 20, None).unwrap();
 
-        assert_eq!("ATTTT", new_seq);
+        assert_eq!("ATTTT", new_seq.seq);
     }
 
     #[test]
@@ -320,6 +324,6 @@ mod tests {
         let repeats = find_all_repeats(&seq, 5);
         let new_seq = generate_collapse(seq, &repeats, 4, Some(42)).unwrap();
 
-        assert_eq!(new_seq, "AAAGGCCCGGGGATTTTGGGCCGCCCAATTT")
+        assert_eq!("AAAGGCCCGGGGATTTTGGGCCGCCCAATTT", new_seq.seq);
     }
 }

@@ -21,7 +21,7 @@ pub struct Cli {
     pub command: Commands,
 }
 
-#[derive(Subcommand)]
+#[derive(Debug, Subcommand)]
 pub enum Commands {
     /// Simulate a misjoin in a sequence.
     Misjoin {
