@@ -13,7 +13,7 @@ use noodles::{
 };
 use rand::prelude::*;
 
-use crate::utils::flatten_repeats;
+use crate::utils::{find_all_repeats, flatten_repeats};
 
 #[derive(Debug, PartialEq, Eq, Clone, Hash)]
 pub struct Repeat {
@@ -41,12 +41,13 @@ pub struct CollapsedSequence {
 
 pub fn generate_collapse(
     seq: &str,
-    repeats: &HashSet<Repeat>,
+    min_length: usize,
     num_repeats: usize,
     seed: Option<u64>,
 ) -> eyre::Result<CollapsedSequence> {
     let mut rng = seed.map_or(StdRng::from_entropy(), StdRng::seed_from_u64);
     let mut new_seqs: Vec<CollapsedSequence> = vec![];
+    let repeats = find_all_repeats(seq, min_length);
     let intervals: IntervalMap<usize, Repeat> =
         IntervalMap::from_iter(repeats.iter().map(|repeat| {
             let (start, stop) = (
@@ -218,8 +219,7 @@ mod tests {
     #[test]
     fn test_generate_collapse() {
         let seq = "ATTTTATTTT";
-        let repeats = find_all_repeats(&seq, 5);
-        let new_seq = generate_collapse(seq, &repeats, 20, None).unwrap();
+        let new_seq = generate_collapse(seq, 5, 20, None).unwrap();
         assert_eq!(
             CollapsedSequence {
                 seq: "ATTTT".to_string(),
@@ -237,8 +237,7 @@ mod tests {
     #[test]
     fn test_generate_collapse_multiple() {
         let seq = "AAAGGCCCGGCCCGGGGATTTTATTTTGGGCCGCCCAATTTAATTT";
-        let repeats = find_all_repeats(&seq, 5);
-        let new_seq = generate_collapse(seq, &repeats, 4, Some(42)).unwrap();
+        let new_seq = generate_collapse(seq, 5, 4, Some(42)).unwrap();
 
         assert_eq!(
             CollapsedSequence {

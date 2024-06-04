@@ -1,6 +1,14 @@
-use std::{collections::HashSet, ops::Range};
+use std::{collections::HashSet, fs::File, io::Write, ops::Range};
 
 use itertools::Itertools;
+use noodles::{
+    bed::{self, record::Builder},
+    fasta::{
+        self,
+        record::{Definition, Sequence},
+        Writer,
+    },
+};
 use rand::{rngs::StdRng, seq::IteratorRandom, Rng, SeedableRng};
 
 use crate::collapse::Repeat;
@@ -150,4 +158,33 @@ pub fn flatten_repeats<'a, R: IntoIterator<Item = &'a Repeat>>(seq: &'a str, rep
     }
 
     new_seq
+}
+
+pub fn write_misassembly<O, I>(
+    seq: Vec<u8>,
+    regions: I,
+    definition: Definition,
+    output_fa: &mut Writer<O>,
+    output_bed: Option<&mut bed::Writer<File>>,
+) -> eyre::Result<()>
+where
+    O: Write,
+    I: IntoIterator<Item = Builder<3>>,
+{
+    let full_record_name = definition.to_string();
+    let record_name = full_record_name
+        .strip_prefix('>')
+        .unwrap_or(&full_record_name);
+
+    // Write the BED file if provided.
+    if let Some(writer_bed) = output_bed {
+        for rp in regions {
+            let record = rp.set_reference_sequence_name(record_name).build()?;
+            writer_bed.write_record(&record)?;
+        }
+    };
+
+    output_fa.write_record(&fasta::Record::new(definition, Sequence::from(seq)))?;
+
+    Ok(())
 }

@@ -53,20 +53,19 @@ pub fn generate_deletion(
     };
 
     for (pos, _, rrange) in seq_segments {
+        let del_seq = &seq[pos..rrange.start];
         if mask_del {
-            new_seq.push_str(&"N".repeat(rrange.len()));
+            new_seq.push_str(&"N".repeat(del_seq.len()));
         }
-        let del_start = pos;
-        let del_end = pos + rrange.len();
-        let del_seq = &seq[del_start..del_end];
-        let remaining_seq = &seq[rrange];
-        new_seq.push_str(remaining_seq);
 
         removed_seqs.push(RemovedSequence {
-            start: del_start,
-            end: del_end,
+            start: pos,
+            end: rrange.start,
             seq: del_seq,
         });
+
+        let remaining_seq = &seq[rrange];
+        new_seq.push_str(remaining_seq);
     }
 
     Ok(DeletedSequence {

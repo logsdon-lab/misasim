@@ -1,8 +1,13 @@
 use clap::{CommandFactory, Parser};
+use itertools::Itertools;
 use log::{info, LevelFilter};
 use noodles::{
-    bed::{self, record::Builder},
-    fasta::{self as fasta, reader::Records, record::Sequence},
+    bed::{
+        self,
+        record::{Builder, OptionalFields},
+    },
+    core::Position,
+    fasta::{self as fasta, reader::Records, record::Definition},
 };
 use simple_logger::SimpleLogger;
 use std::{
@@ -10,6 +15,7 @@ use std::{
     io::{stdin, stdout, BufRead, BufReader, IsTerminal, Write},
     path::PathBuf,
 };
+use utils::{get_sequence_segments, write_misassembly};
 mod cli;
 mod collapse;
 mod false_dupe;
@@ -21,7 +27,6 @@ use {
     collapse::generate_collapse,
     false_dupe::generate_false_duplication,
     misjoin::generate_deletion,
-    utils::find_all_repeats,
 };
 
 #[cfg(feature = "parallel")]
@@ -55,48 +60,34 @@ fn generate_misassemblies<B: BufRead, O: Write>(
                     command == cli::Commands::Gap { number },
                     seed,
                 )?;
-
-                writer_fa.write_record(&fasta::Record::new(
+                write_misassembly(
+                    deleted_seq.seq.into_bytes(),
+                    deleted_seq
+                        .removed_seqs
+                        .into_iter()
+                        .flat_map(TryInto::<Builder<3>>::try_into),
                     record.definition().clone(),
-                    Sequence::from(deleted_seq.seq.into_bytes()),
-                ))?;
-
-                let Some(writer_bed) = &mut output_bed else {
-                    continue;
-                };
-                for del_seq in deleted_seq.removed_seqs {
-                    // Add deleted sequence to BED file.
-                    let record = TryInto::<Builder<3>>::try_into(del_seq)?
-                        .set_reference_sequence_name(record_name)
-                        .build()?;
-                    writer_bed.write_record(&record)?;
-                }
+                    &mut writer_fa,
+                    output_bed.as_mut(),
+                )?;
             }
             cli::Commands::Collapse {
                 length,
                 num_repeats,
             } => {
-                let repeats = find_all_repeats(seq, length);
-                info!("{} repeats found.", repeats.len());
-
-                let collapsed_seq = generate_collapse(seq, &repeats, num_repeats, seed)?;
+                let collapsed_seq = generate_collapse(seq, length, num_repeats, seed)?;
                 info!("{} repeats collapsed.", collapsed_seq.repeats.len());
 
-                writer_fa.write_record(&fasta::Record::new(
+                write_misassembly(
+                    collapsed_seq.seq.into_bytes(),
+                    collapsed_seq
+                        .repeats
+                        .into_iter()
+                        .flat_map(TryInto::<Builder<3>>::try_into),
                     record.definition().clone(),
-                    Sequence::from(collapsed_seq.seq.into_bytes()),
-                ))?;
-
-                // Write the BED file if provided.
-                let Some(writer_bed) = &mut output_bed else {
-                    continue;
-                };
-                for rp in collapsed_seq.repeats {
-                    let record = Into::<Builder<3>>::into(rp)
-                        .set_reference_sequence_name(record_name)
-                        .build()?;
-                    writer_bed.write_record(&record)?;
-                }
+                    &mut writer_fa,
+                    output_bed.as_mut(),
+                )?;
             }
             cli::Commands::FalseDuplication {
                 number,
@@ -105,21 +96,36 @@ fn generate_misassemblies<B: BufRead, O: Write>(
                 let false_dupe_seq =
                     generate_false_duplication(seq, number, max_duplications, seed)?;
 
-                writer_fa.write_record(&fasta::Record::new(
+                write_misassembly(
+                    false_dupe_seq.seq.into_bytes(),
+                    false_dupe_seq
+                        .duplicated_seqs
+                        .into_iter()
+                        .flat_map(TryInto::<Builder<3>>::try_into),
                     record.definition().clone(),
-                    Sequence::from(false_dupe_seq.seq.into_bytes()),
-                ))?;
-                let Some(writer_bed) = &mut output_bed else {
-                    continue;
-                };
-                for dupe_seq in false_dupe_seq.duplicated_seqs.into_iter() {
-                    let record = Into::<Builder<3>>::into(dupe_seq)
-                        .set_reference_sequence_name(record_name)
-                        .build()?;
-                    writer_bed.write_record(&record)?;
+                    &mut writer_fa,
+                    output_bed.as_mut(),
+                )?;
+            }
+            cli::Commands::Break { number } => {
+                let seq_segments = get_sequence_segments(seq, number, seed)
+                    .unwrap()
+                    .collect_vec();
+                for (i, (start, end, _)) in seq_segments.into_iter().enumerate() {
+                    let bseq = seq[start..end].bytes().collect_vec();
+                    let region = bed::Record::<3>::builder()
+                        .set_start_position(Position::new(start).unwrap())
+                        .set_optional_fields(OptionalFields::from(vec!["Break".to_string()]));
+                    let new_definiton = format!("{}_{}", record.definition(), i);
+                    write_misassembly(
+                        bseq,
+                        std::iter::once(region),
+                        Definition::new(new_definiton, None),
+                        &mut writer_fa,
+                        output_bed.as_mut(),
+                    )?;
                 }
             }
-            cli::Commands::Break { number: _ } => {}
         }
     }
     Ok(())
@@ -130,12 +136,9 @@ fn main() -> eyre::Result<()> {
 
     let (file, out_fa, out_bed, cmd, seed) =
         if std::env::var("DEBUG").map_or(false, |v| v == "1" || v == "true") {
-            let cmd = Commands::FalseDuplication {
-                number: 10,
-                max_duplications: 5,
-            };
+            let cmd = Commands::Break { number: 10 };
             let file = PathBuf::from("test/data/HG00171_chr9_haplotype2-0000142.fa");
-            let out_fa: Option<PathBuf> = Some(PathBuf::from("output.fa"));
+            let out_fa: Option<PathBuf> = Some(PathBuf::from("test/output/output.fa"));
             let out_bed = Some(PathBuf::from("test/data/test.bed"));
             let seed = Some(42);
             (file, out_fa, out_bed, cmd, seed)
@@ -181,5 +184,6 @@ fn main() -> eyre::Result<()> {
         let mut fasta_reader = fasta::Reader::new(buf_reader);
         generate_misassemblies(fasta_reader.records(), output_fa, output_bed, seed, cmd)?;
     }
+    info!("Completed generating misassemblies.");
     Ok(())
 }
