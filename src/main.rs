@@ -113,7 +113,14 @@ fn generate_misassemblies(command: cli::Commands) -> eyre::Result<()> {
                     seq,
                     number,
                     // If gap, mask deletion.
-                    matches!(command, cli::Commands::Gap { .. }),
+                    std::mem::discriminant(&command)
+                        == std::mem::discriminant(&cli::Commands::Gap {
+                            number,
+                            infile: PathBuf::default(),
+                            outfile: None,
+                            outbedfile: None,
+                            seed: None,
+                        }),
                     *seed,
                 )?;
                 info!("{} sequences removed.", deleted_seq.removed_seqs.len());
