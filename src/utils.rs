@@ -160,7 +160,7 @@ pub fn flatten_repeats<'a, R: IntoIterator<Item = &'a Repeat>>(seq: &'a str, rep
     new_seq
 }
 
-pub fn write_misassembly<O, I>(
+pub fn write_misassembly<O, R, I>(
     seq: Vec<u8>,
     regions: I,
     definition: Definition,
@@ -169,22 +169,21 @@ pub fn write_misassembly<O, I>(
 ) -> eyre::Result<()>
 where
     O: Write,
-    I: IntoIterator<Item = Builder<3>>,
+    R: TryInto<Builder<3>>,
+    I: IntoIterator<Item = R>,
 {
-    let full_record_name = definition.to_string();
-    let record_name = full_record_name
-        .strip_prefix('>')
-        .unwrap_or(&full_record_name);
-
+    let record_name = std::str::from_utf8(definition.name())?;
     // Write the BED file if provided.
     if let Some(writer_bed) = output_bed {
-        for rp in regions {
-            let record = rp.set_reference_sequence_name(record_name).build()?;
+        for builder in regions
+            .into_iter()
+            .flat_map(|r| TryInto::<Builder<3>>::try_into(r))
+        {
+            let record = builder.set_reference_sequence_name(record_name).build()?;
             writer_bed.write_record(&record)?;
         }
     };
 
     output_fa.write_record(&fasta::Record::new(definition, Sequence::from(seq)))?;
-
     Ok(())
 }
