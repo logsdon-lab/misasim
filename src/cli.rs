@@ -44,13 +44,12 @@ pub enum Commands {
 
     /// Simulate a falsely duplicated sequence.
     FalseDuplication {
-        /// Length in bp to duplicate.
-        #[arg(short, long)]
-        length: usize,
-
         /// Number of false duplications to simulate.
         #[arg(short, long)]
         number: usize,
+
+        /// Maximum number of duplications for any single segment.
+        max_duplications: usize,
     },
 
     /// Simulate a gap in a sequence.

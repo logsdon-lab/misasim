@@ -1,4 +1,5 @@
 use eyre::ContextCompat;
+use itertools::Itertools;
 use noodles::{
     bed::{
         record::{Builder, OptionalFields},
@@ -6,7 +7,8 @@ use noodles::{
     },
     core::Position,
 };
-use rand::prelude::*;
+
+use crate::utils::get_sequence_segments;
 
 #[derive(Debug, PartialEq, Eq, Clone)]
 pub struct RemovedSequence<'a> {
@@ -41,37 +43,29 @@ pub fn generate_deletion(
 ) -> eyre::Result<DeletedSequence> {
     let mut new_seq = String::with_capacity(seq.len());
     let mut removed_seqs: Vec<RemovedSequence> = Vec::with_capacity(number_dels);
-    let mut rng = seed.map_or(StdRng::from_entropy(), StdRng::seed_from_u64);
-    let mut del_pos = (0..seq.len()).choose_multiple(&mut rng, number_dels);
-    del_pos.sort();
-
-    let bp_dels = del_pos.iter().enumerate().map(|(i, p)| {
-        let (stop_pos, dst) = if let Some(pos) = del_pos.get(i + 1) {
-            (*pos, pos - p)
-        } else {
-            (seq.len(), seq.len() - p)
-        };
-        (stop_pos, rng.gen_range(0..dst))
-    });
+    let seq_segments = get_sequence_segments(seq, number_dels, seed)
+        .context("No sequence segments")?
+        .collect_vec();
 
     // Add starting sequence before first position.
-    if let Some(pos) = del_pos.first() {
-        new_seq.push_str(&seq[..*pos]);
+    if let Some((start, _, _)) = seq_segments.first() {
+        new_seq.push_str(&seq[..*start]);
     };
 
-    for (pos, (stop, bp_del)) in del_pos.iter().zip(bp_dels) {
+    for (pos, _, rrange) in seq_segments {
         if mask_del {
-            new_seq.push_str(&"N".repeat(bp_del));
+            new_seq.push_str(&"N".repeat(rrange.len()));
         }
-        let remaining_seq = &seq[pos + bp_del..stop];
+        let del_start = pos;
+        let del_end = pos + rrange.len();
+        let del_seq = &seq[del_start..del_end];
+        let remaining_seq = &seq[rrange];
         new_seq.push_str(remaining_seq);
 
-        let del_start = *pos;
-        let del_end = *pos + bp_del;
         removed_seqs.push(RemovedSequence {
             start: del_start,
             end: del_end,
-            seq: &seq[del_start..del_end],
+            seq: del_seq,
         });
     }
 

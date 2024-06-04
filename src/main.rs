@@ -12,12 +12,16 @@ use std::{
 };
 mod cli;
 mod collapse;
+mod false_dupe;
 mod misjoin;
+mod utils;
 
 use {
     cli::{Cli, Commands},
-    collapse::{find_all_repeats, generate_collapse},
+    collapse::generate_collapse,
+    false_dupe::generate_false_duplication,
     misjoin::generate_deletion,
+    utils::find_all_repeats,
 };
 
 #[cfg(feature = "parallel")]
@@ -94,15 +98,28 @@ fn generate_misassemblies<B: BufRead, O: Write>(
                     writer_bed.write_record(&record)?;
                 }
             }
-            cli::Commands::FalseDuplication { length, number } => {
-                use rand::prelude::*;
-                let mut rng = seed.map_or(StdRng::from_entropy(), StdRng::seed_from_u64);
-                let mut false_dupe_pos = (0..seq.len()).choose_multiple(&mut rng, number);
-                false_dupe_pos.sort();
+            cli::Commands::FalseDuplication {
+                number,
+                max_duplications,
+            } => {
+                let false_dupe_seq =
+                    generate_false_duplication(seq, number, max_duplications, seed)?;
 
-                println!("False duplication with length: {}", length);
+                writer_fa.write_record(&fasta::Record::new(
+                    record.definition().clone(),
+                    Sequence::from(false_dupe_seq.seq.into_bytes()),
+                ))?;
+                let Some(writer_bed) = &mut output_bed else {
+                    continue;
+                };
+                for dupe_seq in false_dupe_seq.duplicated_seqs.into_iter() {
+                    let record = Into::<Builder<3>>::into(dupe_seq)
+                        .set_reference_sequence_name(record_name)
+                        .build()?;
+                    writer_bed.write_record(&record)?;
+                }
             }
-            cli::Commands::Break { number } => {}
+            cli::Commands::Break { number: _ } => {}
         }
     }
     Ok(())
@@ -113,7 +130,10 @@ fn main() -> eyre::Result<()> {
 
     let (file, out_fa, out_bed, cmd, seed) =
         if std::env::var("DEBUG").map_or(false, |v| v == "1" || v == "true") {
-            let cmd = Commands::Misjoin { number: 10 };
+            let cmd = Commands::FalseDuplication {
+                number: 10,
+                max_duplications: 5,
+            };
             let file = PathBuf::from("test/data/HG00171_chr9_haplotype2-0000142.fa");
             let out_fa: Option<PathBuf> = Some(PathBuf::from("output.fa"));
             let out_bed = Some(PathBuf::from("test/data/test.bed"));
