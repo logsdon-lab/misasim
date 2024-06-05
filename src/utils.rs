@@ -71,6 +71,7 @@ pub fn find_repeats(seq: &str, min_len: usize) -> Vec<Repeat> {
     for (idx, curr_sfx) in seq
         .char_indices()
         .flat_map(|(i, _)| seq.get(i..).map(|s| (i, s)))
+        .filter(|(_, s)| s.len() >= min_len)
         .sorted_by(|a, b| a.1.cmp(b.1))
     {
         if let Some((mut sfx, sfx_pos)) = prev_sfx {
@@ -91,11 +92,7 @@ pub fn find_repeats(seq: &str, min_len: usize) -> Vec<Repeat> {
                 }
             }
             let prev_sfx_len = sfx.len();
-            // Remove small suffixes.
-            if prev_sfx_len < min_len {
-                prev_sfx = None;
-                continue;
-            }
+
             // Check slice ahead.
             let sfx_end = sfx_pos + prev_sfx_len;
             let Some(next_sfx) = &curr_sfx.get(sfx_end..sfx_end + prev_sfx_len) else {
