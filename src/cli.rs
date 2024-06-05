@@ -68,6 +68,7 @@ pub enum Commands {
         number: usize,
 
         /// Maximum number of duplications for any single segment.
+        #[arg(short, long, default_value_t = 3)]
         max_duplications: usize,
 
         /// Input sequence file.

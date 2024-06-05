@@ -70,8 +70,7 @@ where
         .zip(seq_region_pairs.1)
         .enumerate()
     {
-        let new_definition =
-            Definition::new(record_name, Some(format!("ctg_{i}").bytes().collect()));
+        let new_definition = Definition::new(format!("{record_name}_ctg_{i}"), None);
         if let Some(region) = region {
             write_misassembly(
                 seq.bytes().collect_vec(),

@@ -30,4 +30,5 @@ Options:
 
 ### TODO
 * Add concurrent record reading with noodle async feature.
+* Add gzip support.
 * Write declarative macro to reduce DRY in cli.
