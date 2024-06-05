@@ -1,16 +1,16 @@
 use breaks::write_breaks;
 use clap::{CommandFactory, Parser};
+use iset::IntervalSet;
 use log::{info, LevelFilter};
-use noodles::{
-    bed::{self},
-    fasta::{self as fasta},
-};
+use noodles::{bed, core::Position, fasta};
 use simple_logger::SimpleLogger;
 use std::{
+    collections::HashMap,
     fs::File,
     io::{stdin, stdout, BufRead, BufReader, IsTerminal, Write},
     path::PathBuf,
 };
+
 use utils::write_misassembly;
 mod breaks;
 mod cli;
@@ -55,9 +55,10 @@ fn get_records(infile: PathBuf) -> eyre::Result<Box<dyn BufRead>> {
 }
 
 fn generate_misassemblies(command: cli::Commands) -> eyre::Result<()> {
-    let (output_fa, mut output_bed, input_records_buf, seed) = match &command {
+    let (output_fa, mut output_bed, input_records_buf, input_bed, seed) = match &command {
         cli::Commands::Misjoin {
             infile,
+            inbedfile,
             outfile,
             outbedfile,
             seed,
@@ -65,6 +66,7 @@ fn generate_misassemblies(command: cli::Commands) -> eyre::Result<()> {
         }
         | cli::Commands::Gap {
             infile,
+            inbedfile,
             outfile,
             outbedfile,
             seed,
@@ -72,6 +74,7 @@ fn generate_misassemblies(command: cli::Commands) -> eyre::Result<()> {
         }
         | cli::Commands::Collapse {
             infile,
+            inbedfile,
             outfile,
             outbedfile,
             seed,
@@ -79,6 +82,7 @@ fn generate_misassemblies(command: cli::Commands) -> eyre::Result<()> {
         }
         | cli::Commands::FalseDuplication {
             infile,
+            inbedfile,
             outfile,
             outbedfile,
             seed,
@@ -86,6 +90,7 @@ fn generate_misassemblies(command: cli::Commands) -> eyre::Result<()> {
         }
         | cli::Commands::Break {
             infile,
+            inbedfile,
             outfile,
             outbedfile,
             seed,
@@ -94,14 +99,31 @@ fn generate_misassemblies(command: cli::Commands) -> eyre::Result<()> {
             let (output_fa, output_bed) = get_outfiles(outfile.clone(), outbedfile.clone())?;
             // https://rust-cli.github.io/book/in-depth/machine-communication.html
             let buf = get_records(infile.clone())?;
-            (output_fa, output_bed, buf, seed)
+            let input_bed = inbedfile
+                .as_ref()
+                .map(File::open)
+                .and_then(|f| f.map(BufReader::new).ok())
+                .map(bed::Reader::new);
+            (output_fa, output_bed, buf, input_bed, seed)
         }
     };
-    let mut records = fasta::Reader::new(input_records_buf);
-    let mut writer_fa = fasta::Writer::new(output_fa);
+    let mut reader_fa = fasta::Reader::new(input_records_buf);
+    if let Some(mut reader_bed) = input_bed {
+        let mut regions: HashMap<String, IntervalSet<Position>> = HashMap::new();
+        for rec in reader_bed.records::<3>().flatten() {
+            let region = rec.start_position()..rec.end_position();
+            regions
+                .entry(rec.to_string())
+                .and_modify(|r| {
+                    r.insert(region);
+                })
+                .or_default();
+        }
+    }
 
+    let mut writer_fa = fasta::Writer::new(output_fa);
     // TODO: async for concurrent record reading.
-    for record in records.records().flatten() {
+    for record in reader_fa.records().flatten() {
         let record_name = std::str::from_utf8(record.definition().name())?;
         info!("Processing record: {:?}.", record_name);
 
@@ -117,6 +139,7 @@ fn generate_misassemblies(command: cli::Commands) -> eyre::Result<()> {
                         == std::mem::discriminant(&cli::Commands::Gap {
                             number,
                             infile: PathBuf::default(),
+                            inbedfile: None,
                             outfile: None,
                             outbedfile: None,
                             seed: None,

@@ -21,6 +21,10 @@ pub enum Commands {
         #[arg(short, long)]
         infile: PathBuf,
 
+        /// Input bed file. Each region should map to a sequence from infile.
+        #[arg(short, long)]
+        inbedfile: Option<PathBuf>,
+
         /// Output sequence file.
         #[arg(short, long)]
         outfile: Option<PathBuf>,
@@ -48,6 +52,10 @@ pub enum Commands {
         #[arg(short, long)]
         infile: PathBuf,
 
+        /// Input bed file. Each region should map to a sequence from infile.
+        #[arg(short, long)]
+        inbedfile: Option<PathBuf>,
+
         /// Output sequence file.
         #[arg(short, long)]
         outfile: Option<PathBuf>,
@@ -74,6 +82,10 @@ pub enum Commands {
         #[arg(short, long)]
         infile: PathBuf,
 
+        /// Input bed file. Each region should map to a sequence from infile.
+        #[arg(short, long)]
+        inbedfile: Option<PathBuf>,
+
         /// Output sequence file.
         #[arg(short, long)]
         outfile: Option<PathBuf>,
@@ -97,6 +109,10 @@ pub enum Commands {
         #[arg(short, long)]
         infile: PathBuf,
 
+        /// Input bed file. Each region should map to a sequence from infile.
+        #[arg(short, long)]
+        inbedfile: Option<PathBuf>,
+
         /// Output sequence file.
         #[arg(short, long)]
         outfile: Option<PathBuf>,
@@ -119,6 +135,10 @@ pub enum Commands {
         /// Input sequence file.
         #[arg(short, long)]
         infile: PathBuf,
+
+        /// Input bed file. Each region should map to a sequence from infile.
+        #[arg(short, long)]
+        inbedfile: Option<PathBuf>,
 
         /// Output sequence file.
         #[arg(short, long)]
