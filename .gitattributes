@@ -1,1 +1,2 @@
 test/data/HG00171_chr9_haplotype2-0000142.fa filter=lfs diff=lfs merge=lfs -text
+test/data/HG00171_chr9_haplotype2-0000142_full.fa filter=lfs diff=lfs merge=lfs -text

@@ -62,11 +62,15 @@ fn read_regions(
         for rec in input_bed.records::<3>().flatten() {
             let region = rec.start_position()..rec.end_position();
             regions
-                .entry(rec.to_string())
+                .entry(rec.reference_sequence_name().to_string())
                 .and_modify(|r| {
-                    r.insert(region);
+                    r.insert(region.clone());
                 })
-                .or_default();
+                .or_insert_with(|| {
+                    let mut rs = IntervalSet::new();
+                    rs.insert(region);
+                    rs
+                });
         }
         regions
     })
@@ -209,15 +213,22 @@ fn generate_misassemblies(command: cli::Commands) -> eyre::Result<()> {
 fn main() -> eyre::Result<()> {
     SimpleLogger::new().with_level(LevelFilter::Debug).init()?;
     let cli = Cli::parse();
+    // let cli = if std::env::var("DEBUG").map_or(false, |v| v == "1" || v == "true") {
+    //     Cli {
+    //         command: Commands::Break {
+    //             number: 10,
+    //             length: 5000,
+    //             infile: PathBuf::from("test/data/HG00171_chr9_haplotype2-0000142_full.fa"),
+    //             inbedfile: Some(PathBuf::from("test/data/region.bed")),
+    //             outfile: None,
+    //             outbedfile: None,
+    //             seed: Some(42),
+    //         },
+    //     }
+    // } else {
+    //     Cli::parse()
+    // };
     info!("Running the following command:\n{:#?}", cli.command);
-
-    // if std::env::var("DEBUG").map_or(false, |v| v == "1" || v == "true") {
-    //     let cmd = Commands::Break { number: 10 };
-    //     let file = PathBuf::from("test/data/HG00171_chr9_haplotype2-0000142.fa");
-    //     let out_fa: Option<PathBuf> = Some(PathBuf::from("test/output/output.fa"));
-    //     let out_bed = Some(PathBuf::from("test/data/test.bed"));
-    //     let seed = Some(42);
-    // }
 
     generate_misassemblies(cli.command)?;
     info!("Completed generating misassemblies.");
