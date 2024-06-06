@@ -4,98 +4,16 @@ import os
 configfile: "config/config.yaml"
 
 
-CTGS = config["misasim"]["ctgs"]
+CTGS = {c["name"]: c["region"] for c in config["misasim"]["ctgs"]}
 OUTPUT_DIR = config["misasim"]["output_dir"]
 SEED = config["misasim"]["seed"]
 MISASSEMBLIES = config["misasim"]["misassemblies"]
+SAMPLES = [c["name"] for c in config["nucflag"]["samples"]]
 
 
 wildcard_constraints:
-    ctg="|".join(CTGS),
-    misassembly="|".join(MISASSEMBLIES.keys())
-
-
-rule index_asm:
-    input:
-        asm=config["misasim"]["asm_fa"]
-    output:
-        asm_faidx=f"{config['misasim']['asm_fa']}.fai",
-    conda:
-        "env/tools.yaml"
-    resources:
-        mem=4
-    log:
-        "logs/index_asm.log",
-    shell:
-        """
-        samtools faidx {input.asm} 2> {log}
-        """
-
-
-rule extract_contig_from_asm:
-    input:
-        asm=config["misasim"]["asm_fa"],
-        asm_faidx=rules.index_asm.output
-    output:
-        ctg_fa=os.path.join(OUTPUT_DIR, "{ctg}.fa")
-    conda:
-        "env/tools.yaml"
-    resources:
-        mem=4
-    log:
-        "logs/extract_{ctg}_from_asm.log",
-    shell:
-        """
-        seqtk subseq {input.asm} <(echo "{wildcards.ctg}") > {output} 2> {log}
-        """
-
-
-rule generate_misassembled_contig:
-    input:
-        misasim_bin="/home/koisland/misasim/target/release/misasim",
-        ctg_fa=rules.extract_contig_from_asm.output.ctg_fa,
-    output:
-        misasm_fa=os.path.join(OUTPUT_DIR, "{ctg}_{misassembly}.fa"),
-        misasm_bed=os.path.join(OUTPUT_DIR, "{ctg}_{misassembly}.bed"),
-    log:
-        "logs/misasim_{ctg}_{misassembly}.log",
-    benchmark:
-        "benchmarks/misasim_{ctg}_{misassembly}.tsv"
-    resources:
-        mem=4
-    params:
-        seed=SEED,
-        long_params=lambda wc: " ".join(
-            f"--{opt} {val}" for opt, val in MISASSEMBLIES[str(wc.misassembly)].items()
-        ),
-    shell:
-        """
-        {input.misasim_bin} {wildcards.misassembly} \
-        {params.long_params} \
-        -i {input.ctg_fa} \
-        -b {output.misasm_bed} \
-        -s {params.seed} > {output.misasm_fa} 2> {log}
-        """
-
-
-rule add_misassembled_ctg_to_asm:
-    input:
-        asm=config["misasim"]["asm_fa"],
-        asm_faidx=rules.index_asm.output,
-        misassembled_ctg=rules.generate_misassembled_contig.output.misasm_fa
-    output:
-        new_asm=os.path.join(OUTPUT_DIR, "{ctg}_{misassembly}_asm.fa")
-    conda:
-        "env/tools.yaml"
-    resources:
-        mem=4
-    log:
-        "logs/add_{misassembly}_{ctg}_to_asm.log",
-    shell:
-        """
-        cat <(seqtk subseq {input.asm} <(grep -v "{wildcards.ctg}" {input.asm_faidx} | cut -f 1)) {input.misassembled_ctg} > {output} 2> {log}
-        samtools faidx {output}
-        """
+    ctg="|".join(CTGS.keys()),
+    misassembly="|".join(MISASSEMBLIES.keys()),
 
 
 module NucFlag:
@@ -110,13 +28,147 @@ module NucFlag:
 use rule * from NucFlag as main_*
 
 
+rule index_asm:
+    input:
+        asm=config["misasim"]["asm_fa"],
+    output:
+        asm_faidx=f"{config['misasim']['asm_fa']}.fai",
+    conda:
+        "env/tools.yaml"
+    resources:
+        mem=4,
+    log:
+        "logs/index_asm.log",
+    shell:
+        """
+        samtools faidx {input.asm} 2> {log}
+        """
+
+
+rule extract_contig_from_asm:
+    input:
+        asm=config["misasim"]["asm_fa"],
+        asm_faidx=rules.index_asm.output,
+    output:
+        ctg_fa=os.path.join(OUTPUT_DIR, "{ctg}.fa"),
+    conda:
+        "env/tools.yaml"
+    resources:
+        mem=4,
+    log:
+        "logs/extract_{ctg}_from_asm.log",
+    shell:
+        """
+        seqtk subseq {input.asm} <(echo "{wildcards.ctg}") > {output} 2> {log}
+        """
+
+
+rule generate_misassembled_contig:
+    input:
+        misasim_bin="/home/koisland/misasim/target/release/misasim",
+        ctg_fa=rules.extract_contig_from_asm.output.ctg_fa,
+        ctg_regions=lambda wc: CTGS[str(wc.ctg)],
+    output:
+        misasm_fa=os.path.join(OUTPUT_DIR, "{ctg}_{misassembly}.fa"),
+        misasm_bed=os.path.join(OUTPUT_DIR, "{ctg}_{misassembly}.bed"),
+    log:
+        "logs/misasim_{ctg}_{misassembly}.log",
+    benchmark:
+        "benchmarks/misasim_{ctg}_{misassembly}.tsv"
+    resources:
+        mem=4,
+    params:
+        seed=SEED,
+        long_params=lambda wc: " ".join(
+            f"--{opt} {val}" for opt, val in MISASSEMBLIES[str(wc.misassembly)].items()
+        ),
+    shell:
+        """
+        {input.misasim_bin} {wildcards.misassembly} \
+        {params.long_params} \
+        -i {input.ctg_fa} \
+        -r {input.ctg_regions} \
+        -b {output.misasm_bed} \
+        -s {params.seed} > {output.misasm_fa} 2> {log}
+        """
+
+
+rule add_misassembled_ctg_to_asm:
+    input:
+        asm=config["misasim"]["asm_fa"],
+        asm_faidx=rules.index_asm.output,
+        misassembled_ctg=rules.generate_misassembled_contig.output.misasm_fa,
+    output:
+        new_asm=os.path.join(OUTPUT_DIR, "{ctg}_{misassembly}_asm.fa"),
+    conda:
+        "env/tools.yaml"
+    resources:
+        mem=4,
+    log:
+        "logs/add_{misassembly}_{ctg}_to_asm.log",
+    shell:
+        """
+        cat <(seqtk subseq {input.asm} <(grep -v "{wildcards.ctg}" {input.asm_faidx} | cut -f 1)) {input.misassembled_ctg} > {output} 2> {log}
+        samtools faidx {output}
+        """
+
+
+def nucflag_sm_cfg(name: str, ctg: str, misassembly: str, bed: str) -> dict[str, str]:
+    return {
+        "name": name,
+        "asm_fa": expand(
+            rules.add_misassembled_ctg_to_asm.output, ctg=ctg, misassembly=misassembly
+        ),
+        "read_dir": "data/reads",
+        "read_ext": "fastq",
+        "region_bed": bed,
+    }
+
+
+module NucFlagMisasim:
+    snakefile:
+        github(
+            "logsdon-lab/Snakemake-NucFlag", path="workflow/Snakefile", branch="main"
+        )
+    config:
+        # Don't run nucflag on breaks. No bases modified just fasta split.
+        {
+            **{k: v for k, v in config["nucflag"].items() if k != "samples"},
+            "samples": [
+                nucflag_sm_cfg(
+                    name=f"{ctg}_{misassembly}",
+                    ctg=ctg,
+                    misassembly=misassembly,
+                    bed=region_bed,
+                )
+                for ctg, region_bed in CTGS.items()
+                for misassembly in MISASSEMBLIES.keys()
+                if misassembly != "break"
+            ],
+        }
+
+
+use rule * from NucFlagMisasim as miasim_*
+
+
 rule all:
     input:
         expand(
             rules.main_nucflag.input,
-            sm=[c["name"] for c in config["nucflag"]["samples"]],
+            sm=SAMPLES,
         ),
-        expand(rules.generate_misassembled_contig.output, ctg=CTGS, misassembly=MISASSEMBLIES.keys()),
-        expand(rules.add_misassembled_ctg_to_asm.output, ctg=CTGS, misassembly=MISASSEMBLIES.keys())
-
+        expand(
+            rules.generate_misassembled_contig.output,
+            ctg=CTGS.keys(),
+            misassembly=MISASSEMBLIES.keys(),
+        ),
+        expand(
+            rules.add_misassembled_ctg_to_asm.output,
+            ctg=CTGS.keys(),
+            misassembly=MISASSEMBLIES.keys(),
+        ),
+        expand(
+            rules.miasim_nucflag.input,
+            sm=SAMPLES,
+        ),
     default_target: True
