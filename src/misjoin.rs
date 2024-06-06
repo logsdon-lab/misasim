@@ -1,4 +1,5 @@
 use eyre::ContextCompat;
+use iset::IntervalSet;
 use itertools::Itertools;
 use noodles::{
     bed::{
@@ -8,7 +9,7 @@ use noodles::{
     core::Position,
 };
 
-use crate::utils::get_sequence_segments;
+use crate::utils::generate_random_seq_ranges;
 
 #[derive(Debug, PartialEq, Eq, Clone)]
 pub struct RemovedSequence<'a> {
@@ -34,37 +35,44 @@ pub struct DeletedSequence<'a> {
     pub removed_seqs: Vec<RemovedSequence<'a>>,
 }
 
-// TODO: Add length. Difficult as may overlap with another. Ignoring for now.
-pub fn generate_deletion(
-    seq: &str,
+pub fn generate_deletion<'a>(
+    seq: &'a str,
+    regions: &IntervalSet<Position>,
+    length: usize,
     number_dels: usize,
     mask_del: bool,
     seed: Option<u64>,
-) -> eyre::Result<DeletedSequence> {
+) -> eyre::Result<DeletedSequence<'a>> {
     let mut new_seq = String::with_capacity(seq.len());
     let mut removed_seqs: Vec<RemovedSequence> = Vec::with_capacity(number_dels);
-    let seq_segments = get_sequence_segments(seq, number_dels, seed)
+    let seq_segments = generate_random_seq_ranges(seq.len(), regions, length, number_dels, seed)?
         .context("No sequence segments")?
         .collect_vec();
 
+    let mut seq_iter = seq_segments.into_iter().peekable();
     // Add starting sequence before first position.
-    if let Some((start, _, _)) = seq_segments.first() {
-        new_seq.push_str(&seq[..*start]);
+    if let Some((_, _, del_range)) = seq_iter.peek() {
+        new_seq.push_str(&seq[..del_range.start]);
     };
 
-    for (pos, _, rrange) in seq_segments {
-        let del_seq = &seq[pos..rrange.start];
+    while let Some((_, _, rrange)) = seq_iter.next() {
+        let del_seq = &seq[rrange.clone()];
         if mask_del {
             new_seq.push_str(&"N".repeat(del_seq.len()));
         }
 
         removed_seqs.push(RemovedSequence {
-            start: pos,
-            end: rrange.start,
+            start: rrange.start,
+            end: rrange.end,
             seq: del_seq,
         });
 
-        let remaining_seq = &seq[rrange];
+        let remaining_seq = if let Some((_, _, next_rrange)) = seq_iter.peek() {
+            &seq[rrange.end..next_rrange.start]
+        } else {
+            &seq[rrange.end..seq.len()]
+        };
+
         new_seq.push_str(remaining_seq);
     }
 
@@ -81,15 +89,18 @@ mod test {
     #[test]
     fn test_generate_misjoin() {
         let seq = "AAAGGCCCGGCCCGGGGATTTTATTTTGGGCCGCCCAATTTAATTT";
-        let new_seq = generate_deletion(seq, 1, false, Some(42)).unwrap();
+        let regions = IntervalSet::from_iter(std::iter::once(
+            Position::new(1).unwrap()..Position::new(seq.len()).unwrap(),
+        ));
+        let new_seq = generate_deletion(seq, &regions, 10, 1, false, Some(42)).unwrap();
 
         assert_eq!(
             DeletedSequence {
-                seq: "AAAGGCCCGGCCCGGGGATTTTAATTT".to_string(),
+                seq: "AAAGGCCCGGCCCGGGGATTTTATGGGCCGCCCAATTTAATTT".to_string(),
                 removed_seqs: [RemovedSequence {
-                    start: 22,
-                    end: 41,
-                    seq: "ATTTTGGGCCGCCCAATTT"
+                    start: 24,
+                    end: 27,
+                    seq: "TTT"
                 }]
                 .to_vec()
             },
@@ -100,26 +111,29 @@ mod test {
     #[test]
     fn test_generate_misjoin_multiple() {
         let seq = "AAAGGCCCGGCCCGGGGATTTTATTTTGGGCCGCCCAATTTAATTT";
-        let new_seq = generate_deletion(seq, 3, false, Some(42)).unwrap();
+        let regions = IntervalSet::from_iter(std::iter::once(
+            Position::new(1).unwrap()..Position::new(seq.len()).unwrap(),
+        ));
+        let new_seq = generate_deletion(seq, &regions, 10, 3, false, Some(42)).unwrap();
 
         assert_eq!(
             DeletedSequence {
-                seq: "AAAGGGGATTTTATTTTGGCT".to_string(),
+                seq: "AAAGGCCCGGCCCGGGGGGCCGCCCAATTTAATT".to_string(),
                 removed_seqs: [
                     RemovedSequence {
-                        start: 4,
-                        end: 14,
-                        seq: "GCCCGGCCCG"
+                        start: 16,
+                        end: 24,
+                        seq: "GATTTTAT"
                     },
                     RemovedSequence {
-                        start: 29,
-                        end: 34,
-                        seq: "GCCGC"
+                        start: 24,
+                        end: 27,
+                        seq: "TTT"
                     },
                     RemovedSequence {
-                        start: 35,
+                        start: 44,
                         end: 45,
-                        seq: "CAATTTAATT"
+                        seq: "T"
                     }
                 ]
                 .to_vec()
@@ -131,26 +145,29 @@ mod test {
     #[test]
     fn test_generate_gap_multiple() {
         let seq = "AAAGGCCCGGCCCGGGGATTTTATTTTGGGCCGCCCAATTTAATTT";
-        let new_seq = generate_deletion(seq, 3, true, Some(42)).unwrap();
+        let regions = IntervalSet::from_iter(std::iter::once(
+            Position::new(1).unwrap()..Position::new(seq.len()).unwrap(),
+        ));
+        let new_seq = generate_deletion(seq, &regions, 10, 3, true, Some(42)).unwrap();
 
         assert_eq!(
             DeletedSequence {
-                seq: "AAAGNNNNNNNNNNGGGATTTTATTTTGGNNNNNCNNNNNNNNNNT".to_string(),
+                seq: "AAAGGCCCGGCCCGGGNNNNNNNNNNNGGGCCGCCCAATTTAATNT".to_string(),
                 removed_seqs: [
                     RemovedSequence {
-                        start: 4,
-                        end: 14,
-                        seq: "GCCCGGCCCG"
+                        start: 16,
+                        end: 24,
+                        seq: "GATTTTAT"
                     },
                     RemovedSequence {
-                        start: 29,
-                        end: 34,
-                        seq: "GCCGC"
+                        start: 24,
+                        end: 27,
+                        seq: "TTT"
                     },
                     RemovedSequence {
-                        start: 35,
+                        start: 44,
                         end: 45,
-                        seq: "CAATTTAATT"
+                        seq: "T"
                     }
                 ]
                 .to_vec()

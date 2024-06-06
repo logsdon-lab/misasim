@@ -1,3 +1,5 @@
+use eyre::ContextCompat;
+use iset::IntervalSet;
 use itertools::Itertools;
 use noodles::{
     bed::{
@@ -9,7 +11,7 @@ use noodles::{
 };
 use std::{fs::File, io::Write};
 
-use crate::utils::{get_sequence_segments, write_misassembly};
+use crate::utils::{generate_random_seq_ranges, write_misassembly};
 
 #[derive(Debug, PartialEq, Eq)]
 pub struct SequenceBreak(pub usize);
@@ -24,30 +26,36 @@ impl From<SequenceBreak> for Builder<3> {
     }
 }
 
-pub fn generate_breaks(
-    seq: &str,
+pub fn generate_breaks<'a>(
+    seq: &'a str,
+    regions: &IntervalSet<Position>,
     number: usize,
     seed: Option<u64>,
-) -> eyre::Result<(Vec<&str>, Vec<Option<SequenceBreak>>)> {
+) -> eyre::Result<(Vec<&'a str>, Vec<Option<SequenceBreak>>)> {
     // Number of seqs is equal to number of breaks + 1.
     // Start (-|-|-) Stop
     let mut seqs = Vec::with_capacity(number + 1);
     let mut breaks: Vec<Option<SequenceBreak>> = vec![];
-    let seq_segments = get_sequence_segments(seq, number, seed)
-        .unwrap()
+    let seq_segments = generate_random_seq_ranges(seq.len(), regions, 1, number, seed)?
+        .context("No sequence segments")?
         .collect_vec();
+    let mut seq_iter = seq_segments.into_iter().peekable();
 
     // Add starting sequence before first break.
-    if let Some((start, _, _)) = seq_segments.first() {
-        let segment = &seq[..*start];
+    if let Some((_, _, brange)) = seq_iter.peek() {
+        let segment = &seq[..brange.start];
         seqs.push(segment);
         breaks.push(None);
     };
 
-    for (start, end, _) in seq_segments.into_iter() {
-        let segment = &seq[start..end];
+    while let Some((_, _, brange)) = seq_iter.next() {
+        let segment = if let Some((_, _, next_brange)) = seq_iter.peek() {
+            &seq[brange.start..next_brange.start]
+        } else {
+            &seq[brange.start..seq.len()]
+        };
         seqs.push(segment);
-        breaks.push(Some(SequenceBreak(end)))
+        breaks.push(Some(SequenceBreak(brange.start)))
     }
 
     Ok((seqs, breaks))
@@ -70,8 +78,7 @@ where
         .zip(seq_region_pairs.1)
         .enumerate()
     {
-        let new_definition =
-            Definition::new(record_name, Some(format!("ctg_{i}").bytes().collect()));
+        let new_definition = Definition::new(format!("{record_name}_ctg_{i}"), None);
         if let Some(region) = region {
             write_misassembly(
                 seq.bytes().collect_vec(),
@@ -101,18 +108,22 @@ mod test {
     #[test]
     fn test_generate_breaks() {
         let seq = "AAAGGCCCGGCCCGGGGATTTTATTTTGGGCCGCCCAATTTAATTT";
-        let (seqs, breaks) = generate_breaks(seq, 3, Some(42)).unwrap();
+        let regions = IntervalSet::from_iter(std::iter::once(
+            Position::new(1).unwrap()..Position::new(seq.len()).unwrap(),
+        ));
+
+        let (seqs, breaks) = generate_breaks(seq, &regions, 3, Some(42)).unwrap();
         assert_eq!(
             seqs,
-            ["AAAG", "GCCCGGCCCGGGGATTTTATTTTGG", "GCCGCC", "CAATTTAATTT"]
+            ["AAAGGCCCGGCCCGGG", "GATTTTAT", "TTTGGGCCGCCCAATTTAAT", "TT"]
         );
         assert_eq!(
             breaks,
             [
                 None,
-                Some(SequenceBreak(29)),
-                Some(SequenceBreak(35)),
-                Some(SequenceBreak(46))
+                Some(SequenceBreak(16)),
+                Some(SequenceBreak(24)),
+                Some(SequenceBreak(44))
             ]
         );
         assert_eq!(seqs.join(""), seq)

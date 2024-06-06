@@ -1,4 +1,3 @@
-use breaks::write_breaks;
 use clap::{CommandFactory, Parser};
 use iset::IntervalSet;
 use log::{info, LevelFilter};
@@ -14,14 +13,15 @@ use std::{
 use utils::write_misassembly;
 mod breaks;
 mod cli;
-mod collapse;
 mod false_dupe;
 mod misjoin;
 mod utils;
 
 use {
-    breaks::generate_breaks, cli::Cli, collapse::generate_collapse,
-    false_dupe::generate_false_duplication, misjoin::generate_deletion,
+    breaks::{generate_breaks, write_breaks},
+    cli::Cli,
+    false_dupe::generate_false_duplication,
+    misjoin::generate_deletion,
 };
 
 type Outfiles = (Box<dyn Write>, Option<bed::Writer<File>>);
@@ -54,6 +54,24 @@ fn get_records(infile: PathBuf) -> eyre::Result<Box<dyn BufRead>> {
     }
 }
 
+fn read_regions(
+    mut reader_bed: Option<bed::Reader<BufReader<File>>>,
+) -> Option<HashMap<String, IntervalSet<Position>>> {
+    reader_bed.as_mut().map(|input_bed| {
+        let mut regions: HashMap<String, IntervalSet<Position>> = HashMap::new();
+        for rec in input_bed.records::<3>().flatten() {
+            let region = rec.start_position()..rec.end_position();
+            regions
+                .entry(rec.to_string())
+                .and_modify(|r| {
+                    r.insert(region);
+                })
+                .or_default();
+        }
+        regions
+    })
+}
+
 fn generate_misassemblies(command: cli::Commands) -> eyre::Result<()> {
     let (output_fa, mut output_bed, input_records_buf, input_bed, seed) = match &command {
         cli::Commands::Misjoin {
@@ -65,14 +83,6 @@ fn generate_misassemblies(command: cli::Commands) -> eyre::Result<()> {
             ..
         }
         | cli::Commands::Gap {
-            infile,
-            inbedfile,
-            outfile,
-            outbedfile,
-            seed,
-            ..
-        }
-        | cli::Commands::Collapse {
             infile,
             inbedfile,
             outfile,
@@ -108,36 +118,38 @@ fn generate_misassemblies(command: cli::Commands) -> eyre::Result<()> {
         }
     };
     let mut reader_fa = fasta::Reader::new(input_records_buf);
-    if let Some(mut reader_bed) = input_bed {
-        let mut regions: HashMap<String, IntervalSet<Position>> = HashMap::new();
-        for rec in reader_bed.records::<3>().flatten() {
-            let region = rec.start_position()..rec.end_position();
-            regions
-                .entry(rec.to_string())
-                .and_modify(|r| {
-                    r.insert(region);
-                })
-                .or_default();
-        }
-    }
+    let regions = read_regions(input_bed);
 
     let mut writer_fa = fasta::Writer::new(output_fa);
     // TODO: async for concurrent record reading.
     for record in reader_fa.records().flatten() {
         let record_name = std::str::from_utf8(record.definition().name())?;
+        let record_interval =
+            Position::new(1).unwrap()..Position::new(record.sequence().len()).unwrap();
+        let def_record_regions = IntervalSet::from_iter(std::iter::once(record_interval));
+        let record_regions = regions
+            .as_ref()
+            .and_then(|r| r.get(record_name))
+            .unwrap_or(&def_record_regions);
+
         info!("Processing record: {:?}.", record_name);
+        info!("With regions: {:?}.", record_regions);
 
         let seq = std::str::from_utf8(record.sequence().as_ref())?;
 
         match command {
-            cli::Commands::Misjoin { number, .. } | cli::Commands::Gap { number, .. } => {
+            cli::Commands::Misjoin { number, length, .. }
+            | cli::Commands::Gap { number, length, .. } => {
                 let deleted_seq = generate_deletion(
                     seq,
+                    record_regions,
+                    length,
                     number,
                     // If gap, mask deletion.
                     std::mem::discriminant(&command)
                         == std::mem::discriminant(&cli::Commands::Gap {
                             number,
+                            length,
                             infile: PathBuf::default(),
                             inbedfile: None,
                             outfile: None,
@@ -156,31 +168,21 @@ fn generate_misassemblies(command: cli::Commands) -> eyre::Result<()> {
                     output_bed.as_mut(),
                 )?;
             }
-            cli::Commands::Collapse {
-                length,
-                number,
-                seed,
-                ..
-            } => {
-                let collapsed_seq = generate_collapse(seq, length, number, seed)?;
-                info!("{} repeats collapsed.", collapsed_seq.repeats.len());
-
-                write_misassembly(
-                    collapsed_seq.seq.into_bytes(),
-                    collapsed_seq.repeats,
-                    record.definition().clone(),
-                    &mut writer_fa,
-                    output_bed.as_mut(),
-                )?;
-            }
             cli::Commands::FalseDuplication {
                 number,
+                length,
                 max_duplications,
                 seed,
                 ..
             } => {
-                let false_dupe_seq =
-                    generate_false_duplication(seq, number, max_duplications, seed)?;
+                let false_dupe_seq = generate_false_duplication(
+                    seq,
+                    record_regions,
+                    length,
+                    number,
+                    max_duplications,
+                    seed,
+                )?;
                 info!(
                     "{} sequences duplicated.",
                     false_dupe_seq.duplicated_seqs.len()
@@ -195,7 +197,7 @@ fn generate_misassemblies(command: cli::Commands) -> eyre::Result<()> {
                 )?;
             }
             cli::Commands::Break { number, seed, .. } => {
-                let seq_breaks = generate_breaks(seq, number, seed)?;
+                let seq_breaks = generate_breaks(seq, record_regions, number, seed)?;
                 write_breaks(record_name, seq_breaks, &mut writer_fa, &mut output_bed)?;
             }
         }
@@ -205,7 +207,7 @@ fn generate_misassemblies(command: cli::Commands) -> eyre::Result<()> {
 }
 
 fn main() -> eyre::Result<()> {
-    SimpleLogger::new().with_level(LevelFilter::Info).init()?;
+    SimpleLogger::new().with_level(LevelFilter::Debug).init()?;
     let cli = Cli::parse();
     info!("Running the following command:\n{:#?}", cli.command);
 
