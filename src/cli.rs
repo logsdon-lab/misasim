@@ -17,36 +17,17 @@ pub enum Commands {
         #[arg(short, long, default_value_t = 1)]
         number: usize,
 
-        /// Input sequence file.
-        #[arg(short, long)]
-        infile: PathBuf,
-
-        /// Output sequence file.
-        #[arg(short, long)]
-        outfile: Option<PathBuf>,
-
-        /// Output BED file with misassemblies.
-        #[arg(short = 'b', long)]
-        outbedfile: Option<PathBuf>,
-
-        /// Seed to use for the random number generator.
-        #[arg(short, long)]
-        seed: Option<u64>,
-    },
-
-    /// Simulate a collapse in a sequence.
-    Collapse {
-        /// Number of repeats to collapse.
-        #[arg(short, long, default_value_t = 1)]
-        number: usize,
-
-        /// Minimum Length of repeat to collapse.
+        /// Max length of misjoin.
         #[arg(short, long, default_value_t = 5_000)]
         length: usize,
 
         /// Input sequence file.
         #[arg(short, long)]
         infile: PathBuf,
+
+        /// Input bed file. Each region should map to a sequence from infile.
+        #[arg(short = 'r', long)]
+        inbedfile: Option<PathBuf>,
 
         /// Output sequence file.
         #[arg(short, long)]
@@ -67,6 +48,10 @@ pub enum Commands {
         #[arg(short, long, default_value_t = 1)]
         number: usize,
 
+        /// Max length of sequence to duplicate.
+        #[arg(short, long, default_value_t = 5_000)]
+        length: usize,
+
         /// Maximum number of duplications for any single segment.
         #[arg(short, long, default_value_t = 3)]
         max_duplications: usize,
@@ -74,6 +59,10 @@ pub enum Commands {
         /// Input sequence file.
         #[arg(short, long)]
         infile: PathBuf,
+
+        /// Input bed file. Each region should map to a sequence from infile.
+        #[arg(short = 'r')]
+        inbedfile: Option<PathBuf>,
 
         /// Output sequence file.
         #[arg(short, long)]
@@ -94,9 +83,17 @@ pub enum Commands {
         #[arg(short, long, default_value_t = 1)]
         number: usize,
 
+        /// Max length of gap simulate.
+        #[arg(short, long, default_value_t = 5_000)]
+        length: usize,
+
         /// Input sequence file.
         #[arg(short, long)]
         infile: PathBuf,
+
+        /// Input bed file. Each region should map to a sequence from infile.
+        #[arg(short = 'r')]
+        inbedfile: Option<PathBuf>,
 
         /// Output sequence file.
         #[arg(short, long)]
@@ -117,9 +114,17 @@ pub enum Commands {
         #[arg(short, long, default_value_t = 1)]
         number: usize,
 
+        /// Max length of break.
+        #[arg(short, long, default_value_t = 5_000)]
+        length: usize,
+
         /// Input sequence file.
         #[arg(short, long)]
         infile: PathBuf,
+
+        /// Input bed file. Each region should map to a sequence from infile.
+        #[arg(short = 'r')]
+        inbedfile: Option<PathBuf>,
 
         /// Output sequence file.
         #[arg(short, long)]

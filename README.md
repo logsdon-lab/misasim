@@ -3,6 +3,9 @@ Simulate a misassembly for a given fasta.
 
 
 ### Getting Started
+Install [Rust](https://www.rust-lang.org/tools/install).
+
+Compile `misasim`.
 ```bash
 cargo build --release
 ```
@@ -13,7 +16,6 @@ Usage: misasim <COMMAND>
 
 Commands:
   misjoin            Simulate a misjoin in a sequence
-  collapse           Simulate a collapse in a sequence
   false-duplication  Simulate a falsely duplicated sequence
   gap                Simulate a gap in a sequence
   break              Simulate a break in a sequence
@@ -25,7 +27,7 @@ Options:
 
 ### Test
 ```bash
-./target/release/misasim collapse -i <(cat test/data/HG00171_chr9_haplotype2-0000142.fa) -b test.bed > test.fa
+./target/release/misasim misjoin -i <(cat test/data/HG00171_chr9_haplotype2-0000142.fa) -b test.bed > test.fa
 ```
 
 ### TODO
