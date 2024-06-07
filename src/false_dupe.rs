@@ -59,7 +59,7 @@ pub fn generate_false_duplication(
     // TODO: Look into characteristics of false duplications. Probably not completely random.
     let mut rng = seed.map_or(StdRng::from_entropy(), StdRng::seed_from_u64);
     while let Some((_, _, rrange)) = seq_iter.next() {
-        let num_dupes = (1..max_duplications.clamp(1, usize::MAX))
+        let num_dupes = (2..max_duplications.clamp(1, usize::MAX))
             .choose(&mut rng)
             .unwrap();
         let dup_seq = &seq[rrange.clone()];
