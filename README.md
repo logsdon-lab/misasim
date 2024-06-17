@@ -26,7 +26,7 @@ cargo build --release
 
 ### Usage
 ```
-Usage: misasim <COMMAND>
+Usage: misasim [OPTIONS] <COMMAND>
 
 Commands:
   misjoin            Simulate a misjoin in a sequence
@@ -36,15 +36,24 @@ Commands:
   help               Print this message or the help of the given subcommand(s)
 
 Options:
-  -h, --help  Print help
+  -i, --infile <INFILE>          Input sequence file
+  -r, --inbedfile <INBEDFILE>    Input bed file. Each region should map to a sequence from infile
+  -o, --outfile <OUTFILE>        Output sequence file
+  -b, --outbedfile <OUTBEDFILE>  Output BED file with misassemblies
+  -s, --seed <SEED>              Seed to use for the random number generator
+  -h, --help                     Print help
 ```
 
 ```bash
-./target/release/misasim misjoin -i test/data/HG00171_chr9_haplotype2-0000142.fa -b test.bed > test.fa
+./target/release/misasim misjoin \
+-i test/data/HG00171_chr9_haplotype2-0000142.fa \
+-b test.bed > test.fa
 ```
 
 ```bash
-cat test/data/HG00171_chr9_haplotype2-0000142.fa | ./target/release/misasim misjoin -i - -b test.bed > test.fa
+cat test/data/HG00171_chr9_haplotype2-0000142.fa | \
+./target/release/misasim misjoin -i - \
+-b test.bed > test.fa
 ```
 
 ### Test
@@ -60,7 +69,7 @@ test/data/asm/
 └── HG00171_asm.fa.fai
 ```
 
-To run it on your cluster, `conda` and `Snakemake==7.32.4` are required.
+To run it on your cluster, `conda` and `Snakemake==7.32.4` are required. Below is an example with [`bsub`](https://www.ibm.com/docs/en/spectrum-lsf/10.1.0?topic=bsub-options).
 ```bash
 queue_name="epistasis_normal"
 snakemake -j 100 \
@@ -73,5 +82,3 @@ snakemake -j 100 \
 
 ### TODO
 * Add concurrent record reading with noodle async feature.
-* Add gzip support.
-* Write declarative macro to reduce DRY in cli.

@@ -9,7 +9,7 @@ eyre = "0.6.12"
 iset = "0.2.2"
 itertools = "0.13.0"
 log = "0.4.21"
-noodles = { version = "0.75.0", features = ["bed", "core", "fasta"] }
+noodles = { version = "0.75.0", features = ["bed", "bgzf", "core", "fasta"] }
 rand = "0.8.5"
 simple_logger = { version = "5.0.0", features = ["stderr"] }
 
