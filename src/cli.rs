@@ -6,9 +6,28 @@ use clap::{Parser, Subcommand};
 pub struct Cli {
     #[command(subcommand)]
     pub command: Commands,
+
+    /// Input sequence file. Uncompressed or bgzipped.
+    #[arg(short, long, global = true)]
+    pub infile: Option<PathBuf>,
+
+    /// Input bed file. Each region should map to a sequence from infile.
+    #[arg(short = 'r', long, global = true)]
+    pub inbedfile: Option<PathBuf>,
+
+    /// Output sequence file.
+    #[arg(short, long, global = true)]
+    pub outfile: Option<PathBuf>,
+
+    /// Output BED file with misassemblies.
+    #[arg(short = 'b', long, global = true)]
+    pub outbedfile: Option<PathBuf>,
+
+    /// Seed to use for the random number generator.
+    #[arg(short, long, global = true)]
+    pub seed: Option<u64>,
 }
 
-// TODO: This can be automatically generate with macros.
 #[derive(Debug, PartialEq, Eq, Subcommand)]
 pub enum Commands {
     /// Simulate a misjoin in a sequence.
@@ -20,26 +39,6 @@ pub enum Commands {
         /// Max length of misjoin.
         #[arg(short, long, default_value_t = 5_000)]
         length: usize,
-
-        /// Input sequence file.
-        #[arg(short, long)]
-        infile: PathBuf,
-
-        /// Input bed file. Each region should map to a sequence from infile.
-        #[arg(short = 'r', long)]
-        inbedfile: Option<PathBuf>,
-
-        /// Output sequence file.
-        #[arg(short, long)]
-        outfile: Option<PathBuf>,
-
-        /// Output BED file with misassemblies.
-        #[arg(short = 'b', long)]
-        outbedfile: Option<PathBuf>,
-
-        /// Seed to use for the random number generator.
-        #[arg(short, long)]
-        seed: Option<u64>,
     },
 
     /// Simulate a falsely duplicated sequence.
@@ -55,26 +54,6 @@ pub enum Commands {
         /// Maximum number of duplications for any single segment.
         #[arg(short, long, default_value_t = 3)]
         max_duplications: usize,
-
-        /// Input sequence file.
-        #[arg(short, long)]
-        infile: PathBuf,
-
-        /// Input bed file. Each region should map to a sequence from infile.
-        #[arg(short = 'r')]
-        inbedfile: Option<PathBuf>,
-
-        /// Output sequence file.
-        #[arg(short, long)]
-        outfile: Option<PathBuf>,
-
-        /// Output BED file with misassemblies.
-        #[arg(short = 'b', long)]
-        outbedfile: Option<PathBuf>,
-
-        /// Seed to use for the random number generator.
-        #[arg(short, long)]
-        seed: Option<u64>,
     },
 
     /// Simulate a gap in a sequence.
@@ -86,26 +65,6 @@ pub enum Commands {
         /// Max length of gap simulate.
         #[arg(short, long, default_value_t = 5_000)]
         length: usize,
-
-        /// Input sequence file.
-        #[arg(short, long)]
-        infile: PathBuf,
-
-        /// Input bed file. Each region should map to a sequence from infile.
-        #[arg(short = 'r')]
-        inbedfile: Option<PathBuf>,
-
-        /// Output sequence file.
-        #[arg(short, long)]
-        outfile: Option<PathBuf>,
-
-        /// Output BED file with misassemblies.
-        #[arg(short = 'b', long)]
-        outbedfile: Option<PathBuf>,
-
-        /// Seed to use for the random number generator.
-        #[arg(short, long)]
-        seed: Option<u64>,
     },
 
     /// Simulate a break in a sequence.
@@ -113,29 +72,5 @@ pub enum Commands {
         /// Number of breaks to simulate.
         #[arg(short, long, default_value_t = 1)]
         number: usize,
-
-        /// Max length of break.
-        #[arg(short, long, default_value_t = 5_000)]
-        length: usize,
-
-        /// Input sequence file.
-        #[arg(short, long)]
-        infile: PathBuf,
-
-        /// Input bed file. Each region should map to a sequence from infile.
-        #[arg(short = 'r')]
-        inbedfile: Option<PathBuf>,
-
-        /// Output sequence file.
-        #[arg(short, long)]
-        outfile: Option<PathBuf>,
-
-        /// Output BED file with misassemblies.
-        #[arg(short = 'b', long)]
-        outbedfile: Option<PathBuf>,
-
-        /// Seed to use for the random number generator.
-        #[arg(short, long)]
-        seed: Option<u64>,
     },
 }
