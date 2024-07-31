@@ -3,3 +3,6 @@ channels:
 dependencies:
   - samtools
   - seqtk
+  - minimap2
+  - bedtools
+  - rustybam

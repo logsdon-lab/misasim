@@ -5,15 +5,27 @@ configfile: "config/config.yaml"
 
 
 CTGS = {c["name"]: c["region"] for c in config["misasim"]["ctgs"]}
+ORTS = {"fwd", "rev"}
 OUTPUT_DIR = config["misasim"]["output_dir"]
-SEED = config["misasim"]["seed"]
 MISASSEMBLIES = config["misasim"]["misassemblies"]
 SAMPLES = [c["name"] for c in config["nucflag"]["samples"]]
+# TODO: Make so other samples can be added.
+MISASM_SAMPLES = [
+    f"{ctg}_{misassembly}"
+    for ctg, region_bed in CTGS.items()
+    for misassembly in MISASSEMBLIES.keys()
+    if misassembly != "break"
+]
 
 
 wildcard_constraints:
     ctg="|".join(CTGS.keys()),
     misassembly="|".join(MISASSEMBLIES.keys()),
+    sm="|".join(MISASM_SAMPLES),
+    sm_1="|".join(MISASM_SAMPLES),
+    sm_2="|".join(MISASM_SAMPLES),
+    ort_1="|".join(ORTS),
+    ort_2="|".join(ORTS),
 
 
 module NucFlag:
@@ -78,7 +90,6 @@ rule generate_misassembled_contig:
     resources:
         mem=4,
     params:
-        seed=SEED,
         long_params=lambda wc: " ".join(
             f"--{opt} {val}" for opt, val in MISASSEMBLIES[str(wc.misassembly)].items()
         ),
@@ -88,8 +99,7 @@ rule generate_misassembled_contig:
         {params.long_params} \
         -i {input.ctg_fa} \
         -r {input.ctg_regions} \
-        -b {output.misasm_bed} \
-        -s {params.seed} > {output.misasm_fa} 2> {log}
+        -b {output.misasm_bed} > {output.misasm_fa} 2> {log}
         """
 
 
@@ -113,16 +123,26 @@ rule add_misassembled_ctg_to_asm:
         """
 
 
-def nucflag_sm_cfg(name: str, ctg: str, misassembly: str, bed: str) -> dict[str, str]:
-    return {
-        "name": name,
-        "asm_fa": expand(
-            rules.add_misassembled_ctg_to_asm.output, ctg=ctg, misassembly=misassembly
-        ),
-        "read_dir": "data/reads",
-        "read_ext": "fastq",
-        "region_bed": bed,
-    }
+# Don't run nucflag on breaks. No bases modified just fasta split.
+NUCFLAG_MISASIM_CFG = {
+    **{k: v for k, v in config["nucflag"].items() if k != "samples"},
+    "samples": [
+        {
+            "name": f"{ctg}_{misassembly}",
+            "asm_fa": expand(
+                rules.add_misassembled_ctg_to_asm.output,
+                ctg=ctg,
+                misassembly=misassembly,
+            ),
+            "read_dir": "data/reads",
+            "read_ext": "fastq",
+            "region_bed": region_bed,
+        }
+        for ctg, region_bed in CTGS.items()
+        for misassembly in MISASSEMBLIES.keys()
+        if misassembly != "break"
+    ],
+}
 
 
 module NucFlagMisasim:
@@ -131,25 +151,72 @@ module NucFlagMisasim:
             "logsdon-lab/Snakemake-NucFlag", path="workflow/Snakefile", branch="main"
         )
     config:
-        # Don't run nucflag on breaks. No bases modified just fasta split.
-        {
-            **{k: v for k, v in config["nucflag"].items() if k != "samples"},
-            "samples": [
-                nucflag_sm_cfg(
-                    name=f"{ctg}_{misassembly}",
-                    ctg=ctg,
-                    misassembly=misassembly,
-                    bed=region_bed,
-                )
-                for ctg, region_bed in CTGS.items()
-                for misassembly in MISASSEMBLIES.keys()
-                if misassembly != "break"
-            ],
-        }
+        NUCFLAG_MISASIM_CFG
 
 
-use rule * from NucFlagMisasim as miasim_*
+use rule * from NucFlagMisasim as misasim_*
 
+
+# Run minimap on pair of contigs
+rule align_pairs:
+    input:
+        ref_fa=os.path.join(OUTPUT_DIR, "{sm_1}.fa"),
+        query_fa=os.path.join(OUTPUT_DIR, "{sm_2}.fa"),
+        region_bed="data/region.bed",
+    output:
+        paf=os.path.join(OUTPUT_DIR, "repair", "{sm_1}_{ort_1}_{sm_2}_{ort_2}.paf"),
+    params:
+        aln_preset="asm5",
+        reverse_ref=lambda wc: "| seqtk seq -r" if wc.ort_1 == "rev" else "",
+        reverse_query=lambda wc: "| seqtk seq -r" if wc.ort_2 == "rev" else "",
+    conda:
+        "env/tools.yaml"
+    resources:
+        mem=50,
+    threads: 8
+    log:
+        "logs/align_pairs_{sm_1}_{ort_1}_{sm_2}_{ort_2}.log",
+    shell:
+        """
+        minimap2 -t {threads} -c --eqx \
+        -x {params.aln_preset} \
+        <(seqtk subseq {input.ref_fa} {input.region_bed} {params.reverse_ref}) \
+        <(seqtk subseq {input.query_fa} {input.region_bed} {params.reverse_query}) > {output.paf} 2> {log}
+        """
+
+
+rule filter_break_paf:
+    input:
+        paf=rules.align_pairs.output.paf,
+    output:
+        paf=os.path.join(OUTPUT_DIR, "repair", "{sm_1}_{ort_1}_{sm_2}_{ort_2}_break.paf"),
+    conda:
+        "env/tools.yaml"
+    params:
+        max_size=1,
+    resources:
+        mem=20,
+    log:
+        "logs/align_pairs_{sm_1}_{ort_1}_{sm_2}_{ort_2}_break.log",
+    shell:
+        """
+        {{ awk '$17 == "tp:A:P"' {input.paf} | rb break-paf --max-size {params.max_size};}} > {output.paf} 2> {log}
+        """
+
+
+# rule generate_concensus:
+#     input:
+#         rules.align_pairs.output
+#     output:
+#     params:
+#     conda:
+#         "env/tools.yaml"
+#     log:
+#         "logs/generate_concensus_{sm_1}_{sm_2}_{ctg}.log",
+#     shell:
+#         """
+#         python
+#         """
 
 rule all:
     input:
@@ -168,7 +235,15 @@ rule all:
             misassembly=MISASSEMBLIES.keys(),
         ),
         expand(
-            rules.miasim_nucflag.input,
-            sm=SAMPLES,
+            rules.misasim_nucflag.input,
+            sm=MISASM_SAMPLES,
         ),
+        [
+            os.path.join(OUTPUT_DIR, "repair", f"{sm_1}_{ort_1}_{sm_2}_{ort_2}_break.paf")
+            for sm_1 in MISASM_SAMPLES
+            for sm_2 in MISASM_SAMPLES
+            for ort_1 in ORTS
+            for ort_2 in ORTS
+            if sm_1 != sm_2
+        ],
     default_target: True

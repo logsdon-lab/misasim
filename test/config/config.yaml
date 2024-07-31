@@ -8,19 +8,22 @@ misasim:
     - name: HG00171_chr9_haplotype2-0000142
       region: data/region.bed
   # Seed to reproduce the same misassemblies.
-  seed: 42
   misassemblies:
     misjoin:
+      seed: 1
       number: 2
       length: 100_000
     false-duplication:
+      seed: 2
       number: 2
       length: 100_000
       max-duplications: 3
     gap:
+      seed: 3
       number: 2
       length: 100_000
     break:
+      seed: 4
       number: 1
 
 nucflag:
