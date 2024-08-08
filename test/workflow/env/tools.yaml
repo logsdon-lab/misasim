@@ -1,9 +1,0 @@
-channels:
-  - bioconda
-dependencies:
-  - samtools
-  - seqtk
-  - seqkit
-  - minimap2
-  - bedtools
-  - rustybam
