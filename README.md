@@ -56,29 +56,5 @@ cat test/data/HG00171_chr9_haplotype2-0000142.fa | \
 -b test.bed > test.fa
 ```
 
-### Test
-To test [`NucFlag`](https://github.com/logsdon-lab/NucFlag) on the misassembled contigs.
-* This requires the original assembly and pacbio hifi reads used to produce it.
-```
-test/data/reads
-├── m54329U_220205_003428.hifi_reads.fastq
-├── m54329U_220212_223600.hifi_reads.fastq
-└── m54329U_220214_093304.hifi_reads.fastq
-test/data/asm/
-├── HG00171_asm.fa
-└── HG00171_asm.fa.fai
-```
-
-To run it on your cluster, `conda` and `Snakemake==7.32.4` are required. Below is an example with [`bsub`](https://www.ibm.com/docs/en/spectrum-lsf/10.1.0?topic=bsub-options).
-```bash
-queue_name="epistasis_normal"
-snakemake -j 100 \
---cluster "bsub -q ${queue_name} -n {threads} -M {resources.mem}GB -R 'rusage[mem={resources.mem}GB]' -o /dev/null" \
--p \
--s test/workflow/Snakefile \
---use-conda \
--d test/
-```
-
 ### TODO
 * Add concurrent record reading with noodle async feature.
