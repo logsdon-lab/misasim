@@ -1,6 +1,11 @@
 channels:
   - conda-forge
+  - bioconda
 dependencies:
   - python==3.12
+  - samtools
   - pip:
     - polars
+    - pysam
+    - cigar
+    - intervaltree
