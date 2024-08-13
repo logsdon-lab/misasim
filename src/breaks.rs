@@ -13,7 +13,7 @@ use std::{fs::File, io::Write};
 
 use crate::utils::{generate_random_seq_ranges, write_misassembly};
 
-#[derive(Debug, PartialEq, Eq)]
+#[derive(Debug, PartialEq, Eq, Clone)]
 pub struct SequenceBreak(pub usize);
 
 impl From<SequenceBreak> for Builder<3> {
@@ -69,7 +69,7 @@ pub fn write_breaks<O, R, I>(
 ) -> eyre::Result<()>
 where
     O: Write,
-    R: TryInto<Builder<3>>,
+    R: TryInto<Builder<3>> + Clone,
     I: IntoIterator<Item = Option<R>>,
 {
     for (i, (seq, region)) in seq_region_pairs
@@ -78,8 +78,21 @@ where
         .zip(seq_region_pairs.1)
         .enumerate()
     {
-        let new_definition = Definition::new(format!("{record_name}_ctg_{i}"), None);
         if let Some(region) = region {
+            let new_definition = TryInto::<Builder<3>>::try_into(region.clone())
+                .map(|b| b.build())
+                .map(|r| {
+                    if let Ok(r) = r {
+                        Definition::new(
+                            format!("{record_name}:{}-{}", r.start_position(), r.end_position()),
+                            None,
+                        )
+                    } else {
+                        Definition::new(format!("{record_name}_ctg_{i}"), None)
+                    }
+                })
+                .unwrap_or(Definition::new(format!("{record_name}_ctg_{i}"), None));
+
             write_misassembly(
                 seq.bytes().collect_vec(),
                 std::iter::once(region),
@@ -88,6 +101,7 @@ where
                 output_bed.as_mut(),
             )?;
         } else {
+            let new_definition = Definition::new(format!("{record_name}_ctg_{i}"), None);
             write_misassembly(
                 seq.bytes().collect_vec(),
                 std::iter::empty::<R>(),
