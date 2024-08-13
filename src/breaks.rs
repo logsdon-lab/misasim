@@ -14,15 +14,20 @@ use std::{fs::File, io::Write};
 use crate::utils::{generate_random_seq_ranges, write_misassembly};
 
 #[derive(Debug, PartialEq, Eq, Clone)]
-pub struct SequenceBreak(pub usize);
+pub struct BrokenSequence {
+    // Start of broken sequence.
+    start: usize,
+    // End of broken sequence.
+    end: usize,
+}
 
-impl From<SequenceBreak> for Builder<3> {
-    fn from(value: SequenceBreak) -> Self {
-        let pos = value.0.clamp(1, usize::MAX);
+impl From<BrokenSequence> for Builder<3> {
+    fn from(value: BrokenSequence) -> Self {
+        let start = value.start.clamp(1, usize::MAX);
         bed::Record::<3>::builder()
-            .set_start_position(Position::new(pos).unwrap())
-            .set_end_position(Position::new(pos).unwrap())
-            .set_optional_fields(OptionalFields::from(vec!["Break".to_string()]))
+            .set_start_position(Position::new(start).unwrap())
+            .set_end_position(Position::new(value.end).unwrap())
+            .set_optional_fields(OptionalFields::from(vec!["Broken".to_string()]))
     }
 }
 
@@ -31,11 +36,11 @@ pub fn generate_breaks<'a>(
     regions: &IntervalSet<Position>,
     number: usize,
     seed: Option<u64>,
-) -> eyre::Result<(Vec<&'a str>, Vec<Option<SequenceBreak>>)> {
+) -> eyre::Result<(Vec<&'a str>, Vec<BrokenSequence>)> {
     // Number of seqs is equal to number of breaks + 1.
     // Start (-|-|-) Stop
     let mut seqs = Vec::with_capacity(number + 1);
-    let mut breaks: Vec<Option<SequenceBreak>> = vec![];
+    let mut breaks: Vec<BrokenSequence> = vec![];
     let seq_segments = generate_random_seq_ranges(seq.len(), regions, 1, number, seed)?
         .context("No sequence segments")?
         .collect_vec();
@@ -44,18 +49,27 @@ pub fn generate_breaks<'a>(
     // Add starting sequence before first break.
     if let Some((_, _, brange)) = seq_iter.peek() {
         let segment = &seq[..brange.start];
+        breaks.push(BrokenSequence {
+            start: 0,
+            end: brange.start,
+        });
         seqs.push(segment);
-        breaks.push(None);
     };
 
     while let Some((_, _, brange)) = seq_iter.next() {
-        let segment = if let Some((_, _, next_brange)) = seq_iter.peek() {
-            &seq[brange.start..next_brange.start]
+        if let Some((_, _, next_brange)) = seq_iter.peek() {
+            seqs.push(&seq[brange.start..next_brange.start]);
+            breaks.push(BrokenSequence {
+                start: brange.start,
+                end: next_brange.start,
+            })
         } else {
-            &seq[brange.start..seq.len()]
-        };
-        seqs.push(segment);
-        breaks.push(Some(SequenceBreak(brange.start)))
+            seqs.push(&seq[brange.start..seq.len()]);
+            breaks.push(BrokenSequence {
+                start: brange.start,
+                end: seq.len(),
+            })
+        }
     }
 
     Ok((seqs, breaks))
@@ -70,7 +84,7 @@ pub fn write_breaks<O, R, I>(
 where
     O: Write,
     R: TryInto<Builder<3>> + Clone,
-    I: IntoIterator<Item = Option<R>>,
+    I: IntoIterator<Item = R>,
 {
     for (i, (seq, region)) in seq_region_pairs
         .0
@@ -78,38 +92,27 @@ where
         .zip(seq_region_pairs.1)
         .enumerate()
     {
-        if let Some(region) = region {
-            let new_definition = TryInto::<Builder<3>>::try_into(region.clone())
-                .map(|b| b.build())
-                .map(|r| {
-                    if let Ok(r) = r {
-                        Definition::new(
-                            format!("{record_name}:{}-{}", r.start_position(), r.end_position()),
-                            None,
-                        )
-                    } else {
-                        Definition::new(format!("{record_name}_ctg_{i}"), None)
-                    }
-                })
-                .unwrap_or(Definition::new(format!("{record_name}_ctg_{i}"), None));
+        let new_definition = TryInto::<Builder<3>>::try_into(region.clone())
+            .map(|b| b.set_reference_sequence_name(record_name).build())
+            .map(|r| {
+                if let Ok(r) = r {
+                    Definition::new(
+                        format!("{record_name}:{}-{}", r.start_position(), r.end_position()),
+                        None,
+                    )
+                } else {
+                    Definition::new(format!("{record_name}_ctg_{i}"), None)
+                }
+            })
+            .unwrap_or(Definition::new(format!("{record_name}_ctg_{i}"), None));
 
-            write_misassembly(
-                seq.bytes().collect_vec(),
-                std::iter::once(region),
-                new_definition,
-                writer_fa,
-                output_bed.as_mut(),
-            )?;
-        } else {
-            let new_definition = Definition::new(format!("{record_name}_ctg_{i}"), None);
-            write_misassembly(
-                seq.bytes().collect_vec(),
-                std::iter::empty::<R>(),
-                new_definition,
-                writer_fa,
-                None,
-            )?;
-        }
+        write_misassembly(
+            seq.bytes().collect_vec(),
+            std::iter::once(region),
+            new_definition,
+            writer_fa,
+            output_bed.as_mut(),
+        )?;
     }
 
     Ok(())
@@ -134,10 +137,13 @@ mod test {
         assert_eq!(
             breaks,
             [
-                None,
-                Some(SequenceBreak(16)),
-                Some(SequenceBreak(24)),
-                Some(SequenceBreak(44))
+                BrokenSequence { start: 0, end: 16 },
+                BrokenSequence { start: 16, end: 24 },
+                BrokenSequence { start: 24, end: 44 },
+                BrokenSequence {
+                    start: 44,
+                    end: seq.len()
+                }
             ]
         );
         assert_eq!(seqs.join(""), seq)
