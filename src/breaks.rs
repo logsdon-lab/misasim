@@ -50,8 +50,8 @@ pub fn generate_breaks<'a>(
     if let Some((_, _, brange)) = seq_iter.peek() {
         let segment = &seq[..brange.start];
         breaks.push(BrokenSequence {
-            start: 0,
-            end: brange.start,
+            start: 1,
+            end: brange.start + 1,
         });
         seqs.push(segment);
     };
@@ -60,14 +60,14 @@ pub fn generate_breaks<'a>(
         if let Some((_, _, next_brange)) = seq_iter.peek() {
             seqs.push(&seq[brange.start..next_brange.start]);
             breaks.push(BrokenSequence {
-                start: brange.start,
-                end: next_brange.start,
+                start: brange.start + 1,
+                end: next_brange.start + 1,
             })
         } else {
             seqs.push(&seq[brange.start..seq.len()]);
             breaks.push(BrokenSequence {
-                start: brange.start,
-                end: seq.len(),
+                start: brange.start + 1,
+                end: seq.len() + 1,
             })
         }
     }
@@ -137,12 +137,12 @@ mod test {
         assert_eq!(
             breaks,
             [
-                BrokenSequence { start: 0, end: 16 },
-                BrokenSequence { start: 16, end: 24 },
-                BrokenSequence { start: 24, end: 44 },
+                BrokenSequence { start: 1, end: 17 },
+                BrokenSequence { start: 17, end: 25 },
+                BrokenSequence { start: 25, end: 45 },
                 BrokenSequence {
-                    start: 44,
-                    end: seq.len()
+                    start: 45,
+                    end: seq.len() + 1
                 }
             ]
         );
