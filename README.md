@@ -36,22 +36,23 @@ Commands:
   help               Print this message or the help of the given subcommand(s)
 
 Options:
-  -i, --infile <INFILE>          Input sequence file
+  -i, --infile <INFILE>          Input sequence file. Uncompressed or bgzipped
   -r, --inbedfile <INBEDFILE>    Input bed file. Each region should map to a sequence from infile
   -o, --outfile <OUTFILE>        Output sequence file
   -b, --outbedfile <OUTBEDFILE>  Output BED file with misassemblies
   -s, --seed <SEED>              Seed to use for the random number generator
+      --randomize-length         Randomize length
   -h, --help                     Print help
 ```
 
 ```bash
 ./target/release/misasim misjoin \
--i test/data/HG00171_chr9_haplotype2-0000142.fa \
+-i test/data/HG002_chr10_cens.fa.gz \
 -b test.bed > test.fa
 ```
 
 ```bash
-cat test/data/HG00171_chr9_haplotype2-0000142.fa | \
+zcat test/data/HG002_chr10_cens.fa.gz | \
 ./target/release/misasim misjoin -i - \
 -b test.bed > test.fa
 ```
