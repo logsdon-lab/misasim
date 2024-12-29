@@ -28,7 +28,7 @@ pub struct Cli {
     pub seed: Option<u64>,
 
     /// Randomize length.
-    #[arg(long, default_value_t = true, global = true)]
+    #[arg(long, action, default_value_t = false, global = true)]
     pub randomize_length: bool,
 }
 

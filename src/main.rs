@@ -45,6 +45,12 @@ fn generate_misassemblies(cli: cli::Cli) -> eyre::Result<()> {
 
     let seed = cli.seed;
     let randomize_length = cli.randomize_length;
+    if let Some(seed) = seed {
+        log::info!("Random seed: {seed:?}");
+    } else {
+        log::info!("No random seed provided. Generating a random seed per record.");
+    }
+    log::info!("Randomizing length: {randomize_length}");
 
     // TODO: async for concurrent record reading.
     for record in reader_fa.records().flatten() {
