@@ -26,6 +26,10 @@ pub struct Cli {
     /// Seed to use for the random number generator.
     #[arg(short, long, global = true)]
     pub seed: Option<u64>,
+
+    /// Randomize length.
+    #[arg(long, default_value_t = true, global = true)]
+    pub randomize_length: bool,
 }
 
 #[derive(Debug, PartialEq, Eq, Subcommand)]

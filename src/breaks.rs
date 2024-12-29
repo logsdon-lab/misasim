@@ -41,7 +41,7 @@ pub fn generate_breaks<'a>(
     // Start (-|-|-) Stop
     let mut seqs = Vec::with_capacity(number + 1);
     let mut breaks: Vec<BrokenSequence> = vec![];
-    let seq_segments = generate_random_seq_ranges(seq.len(), regions, 1, number, seed)?
+    let seq_segments = generate_random_seq_ranges(seq.len(), regions, 1, number, seed, true)?
         .context("No sequence segments")?
         .collect_vec();
     let mut seq_iter = seq_segments.into_iter().peekable();

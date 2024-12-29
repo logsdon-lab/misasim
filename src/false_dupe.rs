@@ -43,10 +43,12 @@ pub fn generate_false_duplication(
     number: usize,
     max_duplications: usize,
     seed: Option<u64>,
+    randomize_length: bool,
 ) -> eyre::Result<DuplicateSequence> {
-    let seq_segments = generate_random_seq_ranges(seq.len(), regions, length, number, seed)?
-        .context("No sequence segments")?
-        .collect_vec();
+    let seq_segments =
+        generate_random_seq_ranges(seq.len(), regions, length, number, seed, randomize_length)?
+            .context("No sequence segments")?
+            .collect_vec();
     let mut seq_iter = seq_segments.into_iter().peekable();
     let mut new_seq = String::new();
     let mut duplicated_seqs = vec![];
@@ -99,7 +101,7 @@ mod test {
             Position::new(1).unwrap()..Position::new(seq.len()).unwrap(),
         ));
 
-        let new_seq = generate_false_duplication(seq, &regions, 10, 1, 3, Some(432)).unwrap();
+        let new_seq = generate_false_duplication(seq, &regions, 10, 1, 3, Some(432), true).unwrap();
         assert_eq!(
             new_seq,
             DuplicateSequence {

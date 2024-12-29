@@ -44,6 +44,7 @@ fn generate_misassemblies(cli: cli::Cli) -> eyre::Result<()> {
     let mut writer_fa = fasta::Writer::new(output_fa);
 
     let seed = cli.seed;
+    let randomize_length = cli.randomize_length;
 
     // TODO: async for concurrent record reading.
     for record in reader_fa.records().flatten() {
@@ -72,6 +73,7 @@ fn generate_misassemblies(cli: cli::Cli) -> eyre::Result<()> {
                     std::mem::discriminant(&command)
                         == std::mem::discriminant(&cli::Commands::Gap { number, length }),
                     seed,
+                    randomize_length,
                 )?;
                 info!("{} sequences removed.", deleted_seq.removed_seqs.len());
 
@@ -95,6 +97,7 @@ fn generate_misassemblies(cli: cli::Cli) -> eyre::Result<()> {
                     number,
                     max_duplications,
                     seed,
+                    randomize_length,
                 )?;
                 info!(
                     "{} sequences duplicated.",

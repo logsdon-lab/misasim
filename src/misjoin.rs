@@ -42,12 +42,20 @@ pub fn generate_deletion<'a>(
     number_dels: usize,
     mask_del: bool,
     seed: Option<u64>,
+    randomize_length: bool,
 ) -> eyre::Result<DeletedSequence<'a>> {
     let mut new_seq = String::with_capacity(seq.len());
     let mut removed_seqs: Vec<RemovedSequence> = Vec::with_capacity(number_dels);
-    let seq_segments = generate_random_seq_ranges(seq.len(), regions, length, number_dels, seed)?
-        .context("No sequence segments")?
-        .collect_vec();
+    let seq_segments = generate_random_seq_ranges(
+        seq.len(),
+        regions,
+        length,
+        number_dels,
+        seed,
+        randomize_length,
+    )?
+    .context("No sequence segments")?
+    .collect_vec();
 
     let mut seq_iter = seq_segments.into_iter().peekable();
     // Add starting sequence before first position.
@@ -92,7 +100,7 @@ mod test {
         let regions = IntervalSet::from_iter(std::iter::once(
             Position::new(1).unwrap()..Position::new(seq.len()).unwrap(),
         ));
-        let new_seq = generate_deletion(seq, &regions, 10, 1, false, Some(42)).unwrap();
+        let new_seq = generate_deletion(seq, &regions, 10, 1, false, Some(42), true).unwrap();
 
         assert_eq!(
             DeletedSequence {
@@ -114,7 +122,7 @@ mod test {
         let regions = IntervalSet::from_iter(std::iter::once(
             Position::new(1).unwrap()..Position::new(seq.len()).unwrap(),
         ));
-        let new_seq = generate_deletion(seq, &regions, 10, 3, false, Some(42)).unwrap();
+        let new_seq = generate_deletion(seq, &regions, 10, 3, false, Some(42), true).unwrap();
 
         assert_eq!(
             DeletedSequence {
@@ -148,7 +156,7 @@ mod test {
         let regions = IntervalSet::from_iter(std::iter::once(
             Position::new(1).unwrap()..Position::new(seq.len()).unwrap(),
         ));
-        let new_seq = generate_deletion(seq, &regions, 10, 3, true, Some(42)).unwrap();
+        let new_seq = generate_deletion(seq, &regions, 10, 3, true, Some(42), true).unwrap();
 
         assert_eq!(
             DeletedSequence {

@@ -31,6 +31,7 @@ pub fn generate_random_seq_ranges(
     length: usize,
     number: usize,
     seed: Option<u64>,
+    randomize_length: bool,
 ) -> eyre::Result<Option<impl Iterator<Item = (usize, usize, Range<usize>)>>> {
     let mut rng = seed.map_or(StdRng::from_entropy(), StdRng::seed_from_u64);
     let mut remaining_segments = number;
@@ -41,13 +42,22 @@ pub fn generate_random_seq_ranges(
             break;
         };
         let (start, stop) = (Into::<usize>::into(pos.start), pos.end.into());
-        let Some(region_start) = (start..stop).choose(&mut rng) else {
-            bail!("Invalid pos: {pos:?}")
+        let (region_start, region_stop) = if randomize_length {
+            let Some(region_start) = (start..stop).choose(&mut rng) else {
+                bail!("Invalid pos: {pos:?}")
+            };
+            let region_stop = (region_start + 1..region_start + length + 1)
+                .choose(&mut rng)
+                .map(|stop| stop.clamp(1, seq_len))
+                .unwrap();
+            (region_start, region_stop)
+        } else {
+            let stop = stop - length;
+            let Some(region_start) = (start..stop).choose(&mut rng) else {
+                bail!("Invalid pos: {pos:?}")
+            };
+            (region_start, region_start + length)
         };
-        let region_stop = (region_start + 1..region_start + length + 1)
-            .choose(&mut rng)
-            .map(|stop| stop.clamp(1, seq_len))
-            .unwrap();
 
         // Ensure no overlaps.
         if positions.has_overlap(region_start..region_stop) {
@@ -109,11 +119,23 @@ mod test {
     fn test_generate_random_seq_ranges() {
         let positions = vec![Position::new(1).unwrap()..Position::new(10).unwrap()];
         let regions = IntervalSet::from_iter(positions);
-        let segments = generate_random_seq_ranges(40, &regions, 10, 2, Some(42))
+        let segments = generate_random_seq_ranges(40, &regions, 10, 2, Some(42), true)
             .unwrap()
             .unwrap()
             .collect_vec();
 
         assert_eq!(segments, [(1, 10, 2..3), (1, 10, 3..9)])
+    }
+
+    #[test]
+    fn test_generate_random_seq_ranges_static_length() {
+        let positions = vec![Position::new(1).unwrap()..Position::new(10).unwrap()];
+        let regions = IntervalSet::from_iter(positions);
+        // Generate two regions of length 2.
+        let segments = generate_random_seq_ranges(40, &regions, 2, 2, Some(42), false)
+            .unwrap()
+            .unwrap()
+            .collect_vec();
+        assert_eq!(segments, [(1, 10, 4..6), (1, 10, 7..9)])
     }
 }
