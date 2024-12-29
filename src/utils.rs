@@ -37,11 +37,15 @@ pub fn generate_random_seq_ranges(
     let mut remaining_segments = number;
     let mut positions = IntervalMap::new();
 
+    // Keep going until required number of segments generated
     while remaining_segments > 0 {
+        // Choose a starting position within the provided region set. ex. bed file.
         let Some(pos) = regions.unsorted_iter().choose(&mut rng) else {
             break;
         };
         let (start, stop) = (Into::<usize>::into(pos.start), pos.end.into());
+        // Then if randomizing length, choose a starting position within the selected region.
+        // Choose a random ending position.
         let (region_start, region_stop) = if randomize_length {
             let Some(region_start) = (start..stop).choose(&mut rng) else {
                 bail!("Invalid pos: {pos:?}")
@@ -52,6 +56,8 @@ pub fn generate_random_seq_ranges(
                 .unwrap();
             (region_start, region_stop)
         } else {
+            // Choose a starting position within the range shortened by the desired length.
+            // Use the randomly selected starting position and add the length.
             let stop = stop - length;
             let Some(region_start) = (start..stop).choose(&mut rng) else {
                 bail!("Invalid pos: {pos:?}")
@@ -60,6 +66,7 @@ pub fn generate_random_seq_ranges(
         };
 
         // Ensure no overlaps.
+        // Keep iterating until a valid position found.
         if positions.has_overlap(region_start..region_stop) {
             continue;
         }

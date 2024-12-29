@@ -42,20 +42,53 @@ Options:
   -b, --outbedfile <OUTBEDFILE>  Output BED file with misassemblies
   -s, --seed <SEED>              Seed to use for the random number generator
       --randomize-length         Randomize length
+  -g, --group-by <GROUP_BY>      Group by regex pattern. ex. "^.*?_(?<hap>.*?)$" with group by haplotype
   -h, --help                     Print help
 ```
 
+### Examples:
+
+#### Generate a misjoin at a random position with a random length.
+```bash
+./target/release/misasim misjoin \
+-i test/data/HG002_chr10_cens.fa.gz
+```
+
+#### Generate 12 misjoins at random positions with a random length.
 ```bash
 ./target/release/misasim misjoin \
 -i test/data/HG002_chr10_cens.fa.gz \
--b test.bed > test.fa
+-n 12
 ```
 
+#### Generate a false-duplication at a random position with a length of 5000 bp.
 ```bash
-zcat test/data/HG002_chr10_cens.fa.gz | \
-./target/release/misasim misjoin -i - \
--b test.bed > test.fa
+./target/release/misasim false-duplication \
+-i test/data/HG002_chr10_cens.fa.gz \
+-l 5000
 ```
 
-### TODO
-* Add concurrent record reading with noodle async feature.
+#### Generate a false-duplication at a random position with a length of 5000 bp duplicated at most four times.
+```bash
+./target/release/misasim false-duplication \
+-i test/data/HG002_chr10_cens.fa.gz \
+-l 5000 \
+--max-duplications 4
+```
+
+#### Generate a gap at a random position within the regions specified with a length of 5000 bp.
+```bash
+./target/release/misasim misjoin \
+-i test/data/HG002.fa.gz \
+-r test/data/region.bed \
+-l 5000
+```
+
+#### Generate a misjoin at a random position within the regions specified with a length of 5000 bp grouped by chromosome name.
+```bash
+# Either chr10_MATERNAL or chr10_PATERNAL would get a misjoin.
+./target/release/misasim misjoin \
+-i test/data/HG002.fa.gz \
+-r test/data/region.bed \
+-g "$(?<chr>.*?)_.*?$" # "$(.*?)_.*?$" would also work.
+```

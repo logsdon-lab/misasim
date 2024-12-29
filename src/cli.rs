@@ -30,6 +30,11 @@ pub struct Cli {
     /// Randomize length.
     #[arg(long, action, default_value_t = false, global = true)]
     pub randomize_length: bool,
+
+    /// Group by regex pattern.
+    /// ex. "^.*?_(?<hap>.*?)$" with group by haplotype.
+    #[arg(short, long, global = true)]
+    pub group_by: Option<String>,
 }
 
 #[derive(Debug, PartialEq, Eq, Subcommand)]

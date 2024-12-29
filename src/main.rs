@@ -3,8 +3,15 @@ use std::{fs::File, io::BufReader};
 use clap::Parser;
 use eyre::bail;
 use iset::IntervalSet;
+use itertools::Itertools;
 use log::{info, LevelFilter};
-use noodles::{bed, core::Position, fasta};
+use noodles::{
+    bed,
+    core::Position,
+    fasta::{self},
+};
+use rand::{rngs::StdRng, seq::SliceRandom, SeedableRng};
+use regex::{self, Regex};
 use simple_logger::SimpleLogger;
 
 mod breaks;
@@ -18,7 +25,7 @@ use {
     breaks::{generate_breaks, write_breaks},
     cli::Cli,
     false_dupe::generate_false_duplication,
-    io::{get_fa_reader, get_outfile_writers, get_regions},
+    io::{get_outfile_writers, get_regions, Fasta},
     misjoin::generate_deletion,
     utils::write_misassembly,
 };
@@ -29,7 +36,7 @@ fn generate_misassemblies(cli: cli::Cli) -> eyre::Result<()> {
     let Some(infile) = cli.infile else {
         bail!("No input fasta provided.")
     };
-    let mut reader_fa = fasta::Reader::new(get_fa_reader(infile)?);
+    let mut reader_fa = Fasta::new(infile)?;
 
     // https://rust-cli.github.io/book/in-depth/machine-communication.html
     let reader_bed = cli
@@ -52,75 +59,130 @@ fn generate_misassemblies(cli: cli::Cli) -> eyre::Result<()> {
     }
     log::info!("Randomizing length: {randomize_length}");
 
-    // TODO: async for concurrent record reading.
-    for record in reader_fa.records().flatten() {
-        let record_name = std::str::from_utf8(record.definition().name())?;
-        let record_interval =
-            Position::new(1).unwrap()..Position::new(record.sequence().len()).unwrap();
-        let def_record_regions = IntervalSet::from_iter(std::iter::once(record_interval));
-        let record_regions = input_regions
-            .as_ref()
-            .and_then(|r| r.get(record_name))
-            .unwrap_or(&def_record_regions);
+    let record_groups = reader_fa.lengths();
 
-        info!("Processing record: {:?}.", record_name);
-        info!("With regions: {:?}.", record_regions);
+    let rgx = cli
+        .group_by
+        .as_deref()
+        .map(|rgx| Regex::new(rgx).unwrap())
+        .unwrap_or_else(|| Regex::new(".*?").unwrap());
 
-        let seq = std::str::from_utf8(record.sequence().as_ref())?;
+    // Group names by captured groups.
+    // ex. [chr10_mat, chr10_pat]
+    // * "^.*?_(?<hap>.*?)$" with group by haplotype.
+    // * "^(?<chr>.*?)_.*?$" will group by chromosome.
+    // * ".*?" will not group as all groups are unique.
+    let groups = record_groups
+        .into_iter()
+        // Sort first by name.
+        .sorted_by(|a, b| a.0.cmp(&b.0))
+        .chunk_by(|(rec, _)| {
+            rgx.captures(rec).map(|captures| {
+                captures
+                    .iter()
+                    .enumerate()
+                    .flat_map(|(i, cap)| {
+                        // Skip entire string match.
+                        if i == 0 {
+                            None
+                        } else {
+                            cap.map(|c| c.as_str().to_owned())
+                        }
+                    })
+                    .collect_vec()
+            })
+        });
 
-        match command {
-            cli::Commands::Misjoin { number, length } | cli::Commands::Gap { number, length } => {
-                let deleted_seq = generate_deletion(
-                    seq,
-                    record_regions,
-                    length,
-                    number,
-                    // If gap, mask deletion.
-                    std::mem::discriminant(&command)
-                        == std::mem::discriminant(&cli::Commands::Gap { number, length }),
-                    seed,
-                    randomize_length,
-                )?;
-                info!("{} sequences removed.", deleted_seq.removed_seqs.len());
+    let mut rng = seed.map_or(StdRng::from_entropy(), StdRng::seed_from_u64);
+    for (grp, grps) in &groups {
+        if cli.group_by.is_some() {
+            log::info!("Grouping by: {grp:?}")
+        }
+        let grps = grps.collect_vec();
+        // Choose one record per group to generate misassemblies.
+        let Some(misasm_rec) = grps.choose(&mut rng) else {
+            continue;
+        };
+        for rec in grps.iter() {
+            let record_name = &rec.0;
+            let record_length: u32 = rec.1.try_into()?;
+            let record = reader_fa.fetch(record_name, 1, record_length)?;
 
-                write_misassembly(
-                    deleted_seq.seq.into_bytes(),
-                    deleted_seq.removed_seqs,
-                    record.definition().clone(),
-                    &mut writer_fa,
-                    output_bed.as_mut(),
-                )?;
+            // If not chosen misassembled sequence, then just write record as is.
+            if rec != misasm_rec {
+                writer_fa.write_record(&record)?;
+                continue;
             }
-            cli::Commands::FalseDuplication {
-                number,
-                length,
-                max_duplications,
-            } => {
-                let false_dupe_seq = generate_false_duplication(
-                    seq,
-                    record_regions,
-                    length,
+
+            let record_interval =
+                Position::new(1).unwrap()..Position::new(record_length.try_into()?).unwrap();
+            let def_record_regions = IntervalSet::from_iter(std::iter::once(record_interval));
+            let record_regions = input_regions
+                .as_ref()
+                .and_then(|r| r.get(record_name))
+                .unwrap_or(&def_record_regions);
+
+            info!("Processing record: {:?}.", record_name);
+            info!("With regions: {:?}.", record_regions);
+
+            let seq = std::str::from_utf8(record.sequence().as_ref())?;
+
+            match command {
+                cli::Commands::Misjoin { number, length }
+                | cli::Commands::Gap { number, length } => {
+                    let is_gap = std::mem::discriminant(&command)
+                        == std::mem::discriminant(&cli::Commands::Gap { number, length });
+                    let deleted_seq = generate_deletion(
+                        seq,
+                        record_regions,
+                        length,
+                        number,
+                        // If gap, mask deletion.
+                        is_gap,
+                        seed,
+                        randomize_length,
+                    )?;
+                    info!("{} sequence(s) removed.", deleted_seq.removed_seqs.len());
+
+                    write_misassembly(
+                        deleted_seq.seq.into_bytes(),
+                        deleted_seq.removed_seqs,
+                        record.definition().clone(),
+                        &mut writer_fa,
+                        output_bed.as_mut(),
+                    )?;
+                }
+                cli::Commands::FalseDuplication {
                     number,
+                    length,
                     max_duplications,
-                    seed,
-                    randomize_length,
-                )?;
-                info!(
-                    "{} sequences duplicated.",
-                    false_dupe_seq.duplicated_seqs.len()
-                );
+                } => {
+                    let false_dupe_seq = generate_false_duplication(
+                        seq,
+                        record_regions,
+                        length,
+                        number,
+                        max_duplications,
+                        seed,
+                        randomize_length,
+                    )?;
+                    info!(
+                        "{} sequence(s) duplicated.",
+                        false_dupe_seq.duplicated_seqs.len()
+                    );
 
-                write_misassembly(
-                    false_dupe_seq.seq.into_bytes(),
-                    false_dupe_seq.duplicated_seqs,
-                    record.definition().clone(),
-                    &mut writer_fa,
-                    output_bed.as_mut(),
-                )?;
-            }
-            cli::Commands::Break { number, .. } => {
-                let seq_breaks = generate_breaks(seq, record_regions, number, seed)?;
-                write_breaks(record_name, seq_breaks, &mut writer_fa, &mut output_bed)?;
+                    write_misassembly(
+                        false_dupe_seq.seq.into_bytes(),
+                        false_dupe_seq.duplicated_seqs,
+                        record.definition().clone(),
+                        &mut writer_fa,
+                        output_bed.as_mut(),
+                    )?;
+                }
+                cli::Commands::Break { number, .. } => {
+                    let seq_breaks = generate_breaks(seq, record_regions, number, seed)?;
+                    write_breaks(record_name, seq_breaks, &mut writer_fa, &mut output_bed)?;
+                }
             }
         }
     }
