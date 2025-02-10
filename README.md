@@ -33,6 +33,7 @@ Commands:
   false-duplication  Simulate a falsely duplicated sequence
   gap                Simulate a gap in a sequence
   break              Simulate a break in a sequence
+  inversion          Simulate an inversion in a sequence
   help               Print this message or the help of the given subcommand(s)
 
 Options:

@@ -17,6 +17,7 @@ use simple_logger::SimpleLogger;
 mod breaks;
 mod cli;
 mod false_dupe;
+mod inversion;
 mod io;
 mod misjoin;
 mod utils;
@@ -25,6 +26,7 @@ use {
     breaks::{generate_breaks, write_breaks},
     cli::Cli,
     false_dupe::generate_false_duplication,
+    inversion::generate_inversion,
     io::{get_outfile_writers, get_regions, Fasta},
     misjoin::generate_deletion,
     utils::write_misassembly,
@@ -183,6 +185,27 @@ fn generate_misassemblies(cli: cli::Cli) -> eyre::Result<()> {
                     let seq_breaks = generate_breaks(seq, record_regions, number, seed)?;
                     write_breaks(record_name, seq_breaks, &mut writer_fa, &mut output_bed)?;
                 }
+                cli::Commands::Inversion { number, length } => {
+                    let inverted_seq = generate_inversion(
+                        seq,
+                        record_regions,
+                        length,
+                        number,
+                        seed,
+                        randomize_length,
+                    )?;
+                    info!("{} sequence(s) inverted.", inverted_seq.inverted_seqs.len());
+
+                    write_misassembly(
+                        inverted_seq.seq.into_bytes(),
+                        inverted_seq.inverted_seqs,
+                        record.definition().clone(),
+                        &mut writer_fa,
+                        output_bed.as_mut(),
+                    )?;
+                } // cli::Commands::Multiple { subcommands } => {
+                  //     unimplemented!()
+                  // }
             }
         }
     }

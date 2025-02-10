@@ -82,4 +82,20 @@ pub enum Commands {
         #[arg(short, long, default_value_t = 1)]
         number: usize,
     },
+
+    /// Simulate an inversion in a sequence.
+    Inversion {
+        /// Number of inversions to simulate.
+        #[arg(short, long, default_value_t = 1)]
+        number: usize,
+
+        /// Max length of inversion simulate.
+        #[arg(short, long, default_value_t = 5_000)]
+        length: usize,
+    }, // Multiple {
+       //     /// Subcommands of the other misassembly types in the form of: `{mtype}:{number}:{length}:{max_duplications}`
+       //     /// Unrelated arguments will be ignored.
+       //     #[arg(short, long, required = true)]
+       //     subcommands: Vec<String>,
+       // }
 }
