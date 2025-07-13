@@ -1,17 +1,10 @@
-use std::{fs::File, io::Write, ops::Range};
-
 use eyre::bail;
-use iset::{IntervalMap, IntervalSet};
-use noodles::{
-    bed::{self, record::Builder},
-    core::Position,
-    fasta::{
-        self,
-        record::{Definition, Sequence},
-        Writer,
-    },
-};
+use itertools::Itertools;
 use rand::{rngs::StdRng, seq::IteratorRandom, SeedableRng};
+use rust_lapper::{Interval, Lapper};
+use std::{fmt::Debug, ops::Range};
+
+use crate::sequence::{SequenceSegment, SequenceType};
 
 /// Generate random sequence segments ranges.
 ///
@@ -25,25 +18,27 @@ use rand::{rngs::StdRng, seq::IteratorRandom, SeedableRng};
 /// # Returns
 /// An iterator of tuples containing the start, stop, and a random length range starting at the start of the segment.
 ///
-pub fn generate_random_seq_ranges(
+pub fn generate_random_seq_ranges<T>(
     seq_len: usize,
-    regions: &IntervalSet<Position>,
+    regions: &Lapper<usize, T>,
     length: usize,
     number: usize,
     seed: Option<u64>,
     randomize_length: bool,
-) -> eyre::Result<Option<impl Iterator<Item = (usize, usize, Range<usize>)>>> {
+) -> eyre::Result<impl Iterator<Item = Interval<usize, Range<usize>>>>
+where
+    T: Eq + Clone + Send + Sync + Debug,
+{
     let mut rng = seed.map_or(StdRng::from_entropy(), StdRng::seed_from_u64);
     let mut remaining_segments = number;
-    let mut positions = IntervalMap::new();
-
+    let mut positions = Lapper::new(vec![]);
     // Keep going until required number of segments generated
     while remaining_segments > 0 {
         // Choose a starting position within the provided region set. ex. bed file.
-        let Some(pos) = regions.unsorted_iter().choose(&mut rng) else {
+        let Some(pos) = regions.iter().choose(&mut rng) else {
             break;
         };
-        let (start, stop) = (Into::<usize>::into(pos.start), pos.end.into());
+        let (start, stop) = (pos.start, pos.stop);
         // Then if randomizing length, choose a starting position within the selected region.
         // Choose a random ending position.
         let (region_start, region_stop) = if randomize_length {
@@ -67,82 +62,317 @@ pub fn generate_random_seq_ranges(
 
         // Ensure no overlaps.
         // Keep iterating until a valid position found.
-        if positions.has_overlap(region_start..region_stop) {
+        if positions.find(region_start, region_stop).count() != 0 {
             continue;
         }
-        positions.insert(region_start..region_stop, (start, stop));
+        positions.insert(Interval {
+            start: region_start,
+            stop: region_stop,
+            val: start..stop,
+        });
         remaining_segments -= 1
     }
 
-    let Some(end) = positions.largest().map(|(p, _)| p.end) else {
-        bail!("No positions found.")
-    };
-
     // let last_pos = positions.last().context("No positions found.")?;
-    Ok(Some(
-        positions
-            .into_iter(0..end)
-            .map(move |(range, (start, stop))| (start, stop, range)),
-    ))
+    Ok(positions.into_iter().map(|itv| Interval {
+        start: itv.val.start,
+        stop: itv.val.end,
+        val: itv.start..itv.stop,
+    }))
 }
 
-pub fn write_misassembly<O, R, I>(
-    seq: Vec<u8>,
-    regions: I,
-    definition: Definition,
-    output_fa: &mut Writer<O>,
-    output_bed: Option<&mut bed::Writer<File>>,
-) -> eyre::Result<()>
+/// Subtract interval by a list of non-overlapping intervals.
+pub fn subtract_intervals<T>(
+    itv: Interval<usize, T>,
+    other: impl Iterator<Item = Interval<usize, T>>,
+) -> Vec<Interval<usize, T>>
 where
-    O: Write,
-    R: TryInto<Builder<3>>,
-    I: IntoIterator<Item = R>,
+    T: Eq + Clone + Send + Sync,
 {
-    let record_name = std::str::from_utf8(definition.name())?;
-    // Write the BED file if provided.
-    if let Some(writer_bed) = output_bed {
-        for builder in regions
-            .into_iter()
-            .flat_map(|r| TryInto::<Builder<3>>::try_into(r))
-        {
-            let record = builder.set_reference_sequence_name(record_name).build()?;
-            writer_bed.write_record(&record)?;
+    let mut split_intervals = Vec::new();
+    let mut st = itv.start;
+    let mut last = itv.stop;
+    for ovl_itv in other.into_iter().sorted_by(|a, b| a.start.cmp(&b.start)) {
+        if last >= ovl_itv.start && last <= ovl_itv.stop {
+            //    |---|
+            // * |---|
+            last = ovl_itv.start;
+        } else if st <= ovl_itv.stop && st >= ovl_itv.start {
+            //   |---|
+            // *  |---|
+            st = ovl_itv.stop;
+        } else if st >= ovl_itv.start && last <= ovl_itv.stop {
+            //   |---|
+            // * |---|
+            break;
+        } else if ovl_itv.start > st && ovl_itv.stop < last {
+            //    |-|
+            // * |---|
+            split_intervals.push(Interval {
+                start: st,
+                stop: ovl_itv.start,
+                val: itv.val.clone(),
+            });
+            st = ovl_itv.stop;
         }
-    };
+    }
+    // Add remainder.
+    if st != last {
+        split_intervals.push(Interval {
+            start: st,
+            stop: last,
+            val: itv.val,
+        });
+    }
+    split_intervals
+}
 
-    output_fa.write_record(&fasta::Record::new(definition, Sequence::from(seq)))?;
-    Ok(())
+/// Subtract misassemblies from a sequence.
+/// # Args
+/// * `seq`
+///     * Complete sequence.
+///     * `[0, seq.len())`
+/// * `misassemblies`
+///     * `SequenceSegments` iterator within `seq` coordinates.
+///
+/// # Returns:
+/// * Good intervals with `None` val.
+pub fn subtract_misassembled_sequences<'a>(
+    seq: &str,
+    misassemblies: impl Iterator<Item = &'a SequenceSegment>,
+) -> Vec<SequenceSegment> {
+    let mut split_intervals = Vec::new();
+    let mut st = 0;
+    let mut last = seq.len();
+    for misassembly in misassemblies
+        .into_iter()
+        .sorted_by(|a, b| a.itv.start.cmp(&b.itv.start))
+    {
+        if last >= misassembly.itv.start && last <= misassembly.itv.stop {
+            //    |---|
+            // * |---|
+            last = misassembly.itv.start;
+        } else if st <= misassembly.itv.stop && st >= misassembly.itv.start {
+            //   |---|
+            // *  |---|
+            st = misassembly.itv.stop;
+        } else if st >= misassembly.itv.start && last <= misassembly.itv.stop {
+            //   |---|
+            // * |---|
+            break;
+        } else if misassembly.itv.start > st && misassembly.itv.stop < last {
+            //    |-|
+            // * |---|
+            split_intervals.push(SequenceSegment {
+                typ: SequenceType::Good,
+                itv: Interval {
+                    start: st,
+                    stop: misassembly.itv.start,
+                    val: None,
+                },
+            });
+            st = misassembly.itv.stop;
+        }
+    }
+    // Add remainder.
+    if st != last {
+        split_intervals.push(SequenceSegment {
+            typ: SequenceType::Good,
+            itv: Interval {
+                start: st,
+                stop: last,
+                val: None,
+            },
+        });
+    }
+    split_intervals
+}
+
+pub fn calculate_new_coords(seqs: &[SequenceSegment]) -> Vec<Option<Interval<usize, ()>>> {
+    let mut adj_coords = Vec::with_capacity(seqs.len());
+    let mut delta: isize = 0;
+    for seq in seqs {
+        // Adjust coordinates of coordinates.
+        let (new_start, new_stop) = if delta.is_negative() {
+            let delta_usize = -delta as usize;
+            (seq.itv.start - delta_usize, seq.itv.stop - delta_usize)
+        } else {
+            let delta_usize = delta as usize;
+            (seq.itv.start + delta_usize, seq.itv.stop + delta_usize)
+        };
+        match seq.typ {
+            SequenceType::Good
+            | SequenceType::Gap
+            | SequenceType::Break
+            | SequenceType::Inversion => {
+                adj_coords.push(Some(Interval {
+                    start: new_start,
+                    stop: new_stop,
+                    val: (),
+                }));
+            }
+            SequenceType::Misjoin => {
+                let adj_delta = seq.itv.stop - seq.itv.start;
+                delta -= adj_delta as isize;
+                // Deleted from assembly.
+                adj_coords.push(None);
+            }
+            SequenceType::FalseDuplication => {
+                let dupe_seq = seq
+                    .itv
+                    .val
+                    .as_ref()
+                    .expect("Invalid state. False dupe with no sequence.");
+                let adj_delta = dupe_seq.len() - (seq.itv.stop - seq.itv.start);
+                delta += adj_delta as isize;
+                // Add duplicate sequence length to end to match.
+                adj_coords.push(Some(Interval {
+                    start: new_start,
+                    stop: new_stop + adj_delta,
+                    val: (),
+                }));
+            }
+        }
+    }
+
+    adj_coords
 }
 
 #[cfg(test)]
 mod test {
-    use iset::IntervalSet;
     use itertools::Itertools;
-    use noodles::core::Position;
+    use rust_lapper::{Interval, Lapper};
+
+    use crate::{
+        sequence::{SequenceSegment, SequenceType},
+        utils::calculate_new_coords,
+    };
 
     use super::generate_random_seq_ranges;
 
     #[test]
     fn test_generate_random_seq_ranges() {
-        let positions = vec![Position::new(1).unwrap()..Position::new(10).unwrap()];
-        let regions = IntervalSet::from_iter(positions);
+        let regions = Lapper::new(vec![Interval {
+            start: 1,
+            stop: 10,
+            val: (),
+        }]);
         let segments = generate_random_seq_ranges(40, &regions, 10, 2, Some(42), true)
-            .unwrap()
             .unwrap()
             .collect_vec();
 
-        assert_eq!(segments, [(1, 10, 2..3), (1, 10, 3..9)])
+        assert_eq!(
+            segments,
+            [
+                Interval {
+                    start: 1,
+                    stop: 10,
+                    val: 2..3
+                },
+                Interval {
+                    start: 1,
+                    stop: 10,
+                    val: 3..9
+                }
+            ]
+        )
     }
 
     #[test]
     fn test_generate_random_seq_ranges_static_length() {
-        let positions = vec![Position::new(1).unwrap()..Position::new(10).unwrap()];
-        let regions = IntervalSet::from_iter(positions);
+        let regions = Lapper::new(vec![Interval {
+            start: 1,
+            stop: 10,
+            val: (),
+        }]);
         // Generate two regions of length 2.
         let segments = generate_random_seq_ranges(40, &regions, 2, 2, Some(42), false)
             .unwrap()
-            .unwrap()
             .collect_vec();
-        assert_eq!(segments, [(1, 10, 4..6), (1, 10, 7..9)])
+        assert_eq!(
+            segments,
+            [
+                Interval {
+                    start: 1,
+                    stop: 10,
+                    val: 4..6
+                },
+                Interval {
+                    start: 1,
+                    stop: 10,
+                    val: 7..9
+                }
+            ]
+        )
+    }
+
+    #[test]
+    fn subtract_misassembled_sequences() {}
+
+    #[test]
+    fn test_compute_delta_seq_segments() {
+        // let seq = "ATTATTATTGCA";
+        let seqs = vec![
+            // ATT---------
+            SequenceSegment {
+                typ: SequenceType::Good,
+                itv: Interval {
+                    start: 0,
+                    stop: 3,
+                    val: None,
+                },
+            },
+            // ---AT-------
+            SequenceSegment {
+                typ: SequenceType::FalseDuplication,
+                itv: Interval {
+                    start: 3,
+                    stop: 5,
+                    val: Some("ATAT".to_owned()),
+                },
+            },
+            // -----TAT----
+            SequenceSegment {
+                typ: SequenceType::Misjoin,
+                itv: Interval {
+                    start: 5,
+                    stop: 7,
+                    val: None,
+                },
+            },
+            // --------TGCA
+            SequenceSegment {
+                typ: SequenceType::Good,
+                itv: Interval {
+                    start: 7,
+                    stop: 12,
+                    val: None,
+                },
+            },
+        ];
+        let new_coords = calculate_new_coords(&seqs);
+        assert_eq!(
+            new_coords,
+            vec![
+                Some(Interval {
+                    start: 0,
+                    stop: 3,
+                    val: ()
+                }),
+                // This gets 2 additional bases from duplication.
+                Some(Interval {
+                    start: 3,
+                    stop: 7,
+                    val: ()
+                }),
+                // This is gone.
+                None,
+                Some(Interval {
+                    start: 7,
+                    stop: 12,
+                    val: ()
+                }),
+            ]
+        )
     }
 }

@@ -1,19 +1,27 @@
 use eyre::Context;
-use iset::IntervalSet;
+use itertools::Itertools;
 use noodles::{
-    bed,
     bgzf::{self, IndexedReader},
-    core::Position,
-    fasta,
+    fasta::{
+        self,
+        record::{definition::Definition, Sequence},
+        Record, Writer,
+    },
 };
+use rust_lapper::{Interval, Lapper};
 use std::{
     collections::HashMap,
     fs::File,
-    io::{stdout, BufReader, Write},
+    io::{stdout, BufRead, BufReader, BufWriter, Write},
     path::{Path, PathBuf},
 };
 
-type Outfiles = (Box<dyn Write>, Option<bed::Writer<File>>);
+use crate::{
+    sequence::{SequenceSegment, SequenceType},
+    utils::calculate_new_coords,
+};
+
+type Outfiles = (Box<dyn Write>, Option<BufWriter<File>>);
 
 pub fn get_outfile_writers(
     outfile: Option<PathBuf>,
@@ -26,7 +34,7 @@ pub fn get_outfile_writers(
     };
     let output_bed = outbedfile
         .and_then(|f| File::create(f).ok())
-        .map(bed::Writer::new);
+        .map(BufWriter::new);
 
     Ok((output_fa, output_bed))
 }
@@ -127,23 +135,93 @@ impl Fasta {
 }
 
 pub fn get_regions(
-    mut reader_bed: Option<bed::Reader<BufReader<File>>>,
-) -> Option<HashMap<String, IntervalSet<Position>>> {
+    mut reader_bed: Option<BufReader<File>>,
+) -> Option<HashMap<String, Lapper<usize, ()>>> {
     reader_bed.as_mut().map(|input_bed| {
-        let mut regions: HashMap<String, IntervalSet<Position>> = HashMap::new();
-        for rec in input_bed.records::<3>().flatten() {
-            let region = rec.start_position()..rec.end_position();
+        let mut regions: HashMap<String, Lapper<usize, ()>> = HashMap::new();
+
+        for rec in input_bed.lines().map_while(Result::ok) {
+            let Some((ctg_name, start, end)) =
+                rec.trim().split('\t').collect_tuple::<(&str, &str, &str)>()
+            else {
+                log::error!("Invalid BED3 line: {rec}");
+                continue;
+            };
+            let (Ok(start), Ok(stop)) = (start.parse::<usize>(), end.parse::<usize>()) else {
+                log::error!("Invalid start or end coordinate on line {rec}");
+                continue;
+            };
+            let region = Interval {
+                start,
+                stop,
+                val: (),
+            };
             regions
-                .entry(rec.reference_sequence_name().to_string())
+                .entry(ctg_name.to_string())
                 .and_modify(|r| {
                     r.insert(region.clone());
                 })
-                .or_insert_with(|| {
-                    let mut rs = IntervalSet::new();
-                    rs.insert(region);
-                    rs
-                });
+                .or_insert_with(|| Lapper::new(vec![region]));
         }
         regions
     })
+}
+
+pub fn write_new_fasta(
+    ctg_name: &str,
+    ctg_seq: &str,
+    seqs: &[SequenceSegment],
+    fa_writer: &mut Writer<Box<dyn Write>>,
+) -> eyre::Result<()> {
+    let mut num_breaks = 0;
+    for seq in seqs {
+        // Is a break, start new contig name.
+        let definition = if let SequenceType::Break = seq.typ {
+            num_breaks += 1;
+            continue;
+        } else if num_breaks == 0 {
+            Definition::new(ctg_name, None)
+        } else {
+            Definition::new(format!("{ctg_name}_{num_breaks}"), None)
+        };
+        let sequence = if let Some(misassembled_sequence) = &seq.itv.val {
+            Sequence::from(misassembled_sequence.as_bytes().to_vec())
+        } else {
+            Sequence::from(ctg_seq.as_bytes()[seq.itv.start..seq.itv.stop].to_vec())
+        };
+
+        fa_writer.write_record(&Record::new(definition, sequence))?;
+    }
+    Ok(())
+}
+
+pub fn write_misassembly_bed(
+    ctg_name: &str,
+    seqs: &[SequenceSegment],
+    bed_writer: &mut BufWriter<File>,
+) -> eyre::Result<()> {
+    let new_coords = calculate_new_coords(seqs);
+    for (seq, new_coords) in seqs.iter().zip(new_coords) {
+        let (new_start, new_stop) = if let Some(itv) = new_coords {
+            (itv.start, itv.stop)
+        } else {
+            // If interval doesn't exist in new assembly.
+            (0, 0)
+        };
+        let color = seq.typ.as_color();
+        writeln!(
+            bed_writer,
+            "{}\t{}\t{}\t{}\t{}\t.\t{}\t{}\t{}",
+            ctg_name,
+            seq.itv.start, // Original start
+            seq.itv.stop,  // Original end
+            seq.typ,       // Sequence type
+            0,
+            // No strand
+            new_start, // Adjusted start
+            new_stop,  // Adjusted end
+            color,     // Red
+        )?;
+    }
+    Ok(())
 }

@@ -1,0 +1,12 @@
+[
+    {
+        "mtype": "misjoin",
+        "number": 1,
+        "length": 3
+    },
+    {
+        "mtype": "inversion",
+        "number": 1,
+        "length": 3
+    }
+]
