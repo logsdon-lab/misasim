@@ -25,20 +25,39 @@ pub fn generate_random_seq_ranges<T>(
     number: usize,
     seed: Option<u64>,
     randomize_length: bool,
-) -> eyre::Result<impl Iterator<Item = Interval<usize, Range<usize>>>>
+) -> eyre::Result<Box<dyn Iterator<Item = Interval<usize, Range<usize>>>>>
 where
     T: Eq + Clone + Send + Sync + Debug,
 {
     let mut rng = seed.map_or(StdRng::from_entropy(), StdRng::seed_from_u64);
     let mut remaining_segments = number;
-    let mut positions = Lapper::new(vec![]);
+    let mut positions: Lapper<usize, Range<usize>> = Lapper::new(vec![]);
+
+    const STOP_ITERATION_CHECK: usize = 1000;
+    let mut num_iterations = 0;
     // Keep going until required number of segments generated
     while remaining_segments > 0 {
+        // Exit if reach stop iteration.
+        if num_iterations > STOP_ITERATION_CHECK {
+            log::warn!("Reached {num_iterations} iterations. Desired length or number of regions is too large for provided regions.");
+            return Ok(Box::new(std::iter::empty()));
+        }
+
         // Choose a starting position within the provided region set. ex. bed file.
         let Some(pos) = regions.iter().choose(&mut rng) else {
             break;
         };
         let (start, stop) = (pos.start, pos.stop);
+
+        // Cannot get region of length if larger than stop coord.
+        if !randomize_length && length > stop {
+            num_iterations += 1;
+            log::warn!(
+                "Length ({length}) greater than {pos:?} length on iteration {num_iterations}"
+            );
+            continue;
+        }
+
         // Then if randomizing length, choose a starting position within the selected region.
         // Choose a random ending position.
         let (region_start, region_stop) = if randomize_length {
@@ -53,8 +72,10 @@ where
         } else {
             // Choose a starting position within the range shortened by the desired length.
             // Use the randomly selected starting position and add the length.
-            let stop = stop - length;
-            let Some(region_start) = (start..stop).choose(&mut rng) else {
+            let Some(region_start) = stop
+                .checked_sub(length)
+                .and_then(|stop| (start..stop).choose(&mut rng))
+            else {
                 bail!("Invalid pos: {pos:?}")
             };
             (region_start, region_start + length)
@@ -63,6 +84,8 @@ where
         // Ensure no overlaps.
         // Keep iterating until a valid position found.
         if positions.find(region_start, region_stop).count() != 0 {
+            log::warn!("Cannot find valid position for ({region_start},{region_stop}) on iteration {num_iterations}.");
+            num_iterations += 1;
             continue;
         }
         positions.insert(Interval {
@@ -74,11 +97,13 @@ where
     }
 
     // let last_pos = positions.last().context("No positions found.")?;
-    Ok(positions.into_iter().map(|itv| Interval {
-        start: itv.val.start,
-        stop: itv.val.end,
-        val: itv.start..itv.stop,
-    }))
+    Ok(Box::new(positions.into_iter().map(
+        |itv: Interval<usize, Range<usize>>| Interval {
+            start: itv.val.start,
+            stop: itv.val.end,
+            val: itv.start..itv.stop,
+        },
+    )))
 }
 
 /// Subtract interval by a list of non-overlapping intervals.
@@ -253,6 +278,19 @@ mod test {
     };
 
     use super::generate_random_seq_ranges;
+
+    #[test]
+    fn test_generate_random_seq_ranges_stop_iter() {
+        let regions = Lapper::new(vec![Interval {
+            start: 1,
+            stop: 10,
+            val: (),
+        }]);
+        let segments = generate_random_seq_ranges(40, &regions, 50, 2, Some(42), false)
+            .unwrap()
+            .collect_vec();
+        assert_eq!(segments, vec![])
+    }
 
     #[test]
     fn test_generate_random_seq_ranges() {
