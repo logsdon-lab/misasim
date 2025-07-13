@@ -6,12 +6,13 @@ edition = "2021"
 [dependencies]
 clap = { version = "4.5.4", features = ["derive"] }
 eyre = "0.6.12"
-iset = "0.2.2"
 itertools = "0.13.0"
+json = "0.12.4"
 log = "0.4.21"
-noodles = { version = "0.75.0", features = ["bed", "bgzf", "core", "fasta"] }
+noodles = { version = "0.75.0", features = ["bgzf", "core", "fasta"] }
 rand = "0.8.5"
 regex = "1.11.1"
+rust-lapper = "1.2.0"
 simple_logger = { version = "5.0.0", features = ["stderr"] }
 
 [[bin]]
