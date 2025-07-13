@@ -22,7 +22,7 @@ pub fn create_inversion(
                         'T' => 'A',
                         'G' => 'C',
                         'C' => 'G',
-                        _ => panic!("Invalid {nt}"),
+                        _ => nt,
                     })
                     .rev()
                     .collect();

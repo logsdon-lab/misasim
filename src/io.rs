@@ -202,12 +202,7 @@ pub fn write_misassembly_bed(
 ) -> eyre::Result<()> {
     let new_coords = calculate_new_coords(seqs);
     for (seq, new_coords) in seqs.iter().zip(new_coords) {
-        let (new_start, new_stop) = if let Some(itv) = new_coords {
-            (itv.start, itv.stop)
-        } else {
-            // If interval doesn't exist in new assembly.
-            (0, 0)
-        };
+        let (new_start, new_stop) = (new_coords.start, new_coords.stop);
         let color = seq.typ.as_color();
         writeln!(
             bed_writer,

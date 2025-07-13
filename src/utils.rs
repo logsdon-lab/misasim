@@ -188,7 +188,7 @@ pub fn subtract_misassembled_sequences<'a>(
     split_intervals
 }
 
-pub fn calculate_new_coords(seqs: &[SequenceSegment]) -> Vec<Option<Interval<usize, ()>>> {
+pub fn calculate_new_coords(seqs: &[SequenceSegment]) -> Vec<Interval<usize, ()>> {
     let mut adj_coords = Vec::with_capacity(seqs.len());
     let mut delta: isize = 0;
     for seq in seqs {
@@ -205,17 +205,21 @@ pub fn calculate_new_coords(seqs: &[SequenceSegment]) -> Vec<Option<Interval<usi
             | SequenceType::Gap
             | SequenceType::Break
             | SequenceType::Inversion => {
-                adj_coords.push(Some(Interval {
+                adj_coords.push(Interval {
                     start: new_start,
                     stop: new_stop,
                     val: (),
-                }));
+                });
             }
             SequenceType::Misjoin => {
                 let adj_delta = seq.itv.stop - seq.itv.start;
                 delta -= adj_delta as isize;
-                // Deleted from assembly.
-                adj_coords.push(None);
+                // Deleted from assembly. Null interval
+                adj_coords.push(Interval {
+                    start: new_start,
+                    stop: new_start,
+                    val: (),
+                });
             }
             SequenceType::FalseDuplication => {
                 let dupe_seq = seq
@@ -226,11 +230,11 @@ pub fn calculate_new_coords(seqs: &[SequenceSegment]) -> Vec<Option<Interval<usi
                 let adj_delta = dupe_seq.len() - (seq.itv.stop - seq.itv.start);
                 delta += adj_delta as isize;
                 // Add duplicate sequence length to end to match.
-                adj_coords.push(Some(Interval {
+                adj_coords.push(Interval {
                     start: new_start,
                     stop: new_stop + adj_delta,
                     val: (),
-                }));
+                });
             }
         }
     }
@@ -354,24 +358,28 @@ mod test {
         assert_eq!(
             new_coords,
             vec![
-                Some(Interval {
+                Interval {
                     start: 0,
                     stop: 3,
                     val: ()
-                }),
+                },
                 // This gets 2 additional bases from duplication.
-                Some(Interval {
+                Interval {
                     start: 3,
                     stop: 7,
                     val: ()
-                }),
+                },
                 // This is gone.
-                None,
-                Some(Interval {
+                Interval {
+                    start: 7,
+                    stop: 7,
+                    val: ()
+                },
+                Interval {
                     start: 7,
                     stop: 12,
                     val: ()
-                }),
+                },
             ]
         )
     }
