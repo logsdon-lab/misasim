@@ -174,23 +174,35 @@ pub fn write_new_fasta(
     fa_writer: &mut Writer<Box<dyn Write>>,
 ) -> eyre::Result<()> {
     let mut num_breaks = 0;
+    let mut records: HashMap<String, String> = HashMap::new();
+
     for seq in seqs {
         // Is a break, start new contig name.
-        let definition = if let SequenceType::Break = seq.typ {
+        let ctg_name = if let SequenceType::Break = seq.typ {
             num_breaks += 1;
             continue;
         } else if num_breaks == 0 {
-            Definition::new(ctg_name, None)
+            ctg_name.to_owned()
         } else {
-            Definition::new(format!("{ctg_name}_{num_breaks}"), None)
+            format!("{ctg_name}_{num_breaks}")
         };
-        let sequence = if let Some(misassembled_sequence) = &seq.itv.val {
-            Sequence::from(misassembled_sequence.as_bytes().to_vec())
+        let seq_slice = if let SequenceType::Good = seq.typ {
+            &ctg_seq[seq.itv.start..seq.itv.stop]
+        } else if let Some(misassembled_sequence) = &seq.itv.val {
+            misassembled_sequence.as_str()
         } else {
-            Sequence::from(ctg_seq.as_bytes()[seq.itv.start..seq.itv.stop].to_vec())
+            continue;
         };
-
-        fa_writer.write_record(&Record::new(definition, sequence))?;
+        records
+            .entry(ctg_name)
+            .and_modify(|seq| seq.push_str(seq_slice))
+            .or_insert_with(|| seq_slice.to_owned());
+    }
+    for (definition, sequence) in records.into_iter().sorted_by(|a, b| a.0.cmp(&b.0)) {
+        fa_writer.write_record(&Record::new(
+            Definition::new(definition, None),
+            Sequence::from(sequence.into_bytes()),
+        ))?;
     }
     Ok(())
 }
@@ -219,4 +231,146 @@ pub fn write_misassembly_bed(
         )?;
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod test {
+    use std::{
+        fs::File,
+        io::{BufRead, BufReader, BufWriter, Write},
+    };
+
+    use itertools::Itertools;
+    use noodles::fasta::{
+        record::{Definition, Sequence},
+        Reader, Record, Writer,
+    };
+    use rust_lapper::{Interval, Lapper};
+
+    use crate::{
+        cli::Misassembly,
+        io::{write_misassembly_bed, write_new_fasta},
+        misassembly::create_all_sequences,
+        sequence::SequenceSegment,
+    };
+
+    fn example_seq() -> (&'static str, &'static str, Vec<SequenceSegment>) {
+        (
+            "seq_1",
+            "ATTATTATTGCA",
+            create_all_sequences(
+                &Misassembly::Misjoin {
+                    number: 2,
+                    length: 4,
+                },
+                "ATTATTATTGCA",
+                &Lapper::new(vec![Interval {
+                    start: 1,
+                    stop: 5,
+                    val: (),
+                }]),
+                Some(12),
+                true,
+            )
+            .unwrap(),
+        )
+    }
+
+    #[test]
+    fn test_write_fa() {
+        // Create misjoin
+        let (ctg_name, ctg_seq, seqs) = example_seq();
+
+        // Write to tempfile
+        let fname = "test/test.fa";
+        {
+            let fh = Box::new(BufWriter::new(File::create(fname).unwrap())) as Box<dyn Write>;
+            let mut writer = Writer::new(fh);
+            write_new_fasta(ctg_name, ctg_seq, &seqs, &mut writer).unwrap()
+        };
+        // Check that sequence is correctly deleted.
+        {
+            let mut fh = Reader::new(BufReader::new(File::open(fname).unwrap()));
+            let record = fh.records().next().unwrap().unwrap();
+            // Remove nts from 2-6 (TATT)
+            assert_eq!(
+                record,
+                Record::new(
+                    Definition::new(ctg_name, None),
+                    Sequence::from("ATATTGCA".as_bytes().to_vec())
+                )
+            )
+        };
+        // Then remove.
+        std::fs::remove_file(fname).unwrap();
+    }
+
+    #[test]
+    fn test_write_bed() {
+        let (ctg_name, _ctg_seq, seqs) = example_seq();
+
+        let fname = "test/test.bed";
+        {
+            let mut writer = BufWriter::new(File::create(fname).unwrap());
+            write_misassembly_bed(ctg_name, &seqs, &mut writer).unwrap();
+        };
+        {
+            let fh = BufReader::new(File::open(fname).unwrap());
+            let res = fh
+                .lines()
+                .map_while(Result::ok)
+                .map(|l| l.trim().split('\t').map(|e| e.to_owned()).collect_vec())
+                .collect_vec();
+            assert_eq!(
+                res,
+                vec![
+                    vec![
+                        "seq_1".to_owned(),
+                        "0".to_owned(),
+                        "2".to_owned(),
+                        "good".to_owned(),
+                        "0".to_owned(),
+                        ".".to_owned(),
+                        "0".to_owned(),
+                        "2".to_owned(),
+                        "0,0,0".to_owned()
+                    ],
+                    vec![
+                        "seq_1".to_owned(),
+                        "2".to_owned(),
+                        "3".to_owned(),
+                        "misjoin".to_owned(),
+                        "0".to_owned(),
+                        ".".to_owned(),
+                        "2".to_owned(),
+                        "2".to_owned(),
+                        "255,0,0".to_owned()
+                    ],
+                    vec![
+                        "seq_1".to_owned(),
+                        "3".to_owned(),
+                        "6".to_owned(),
+                        "misjoin".to_owned(),
+                        "0".to_owned(),
+                        ".".to_owned(),
+                        "2".to_owned(),
+                        "2".to_owned(),
+                        "255,0,0".to_owned()
+                    ],
+                    vec![
+                        "seq_1".to_owned(),
+                        "6".to_owned(),
+                        "12".to_owned(),
+                        "good".to_owned(),
+                        "0".to_owned(),
+                        ".".to_owned(),
+                        "2".to_owned(),
+                        "8".to_owned(),
+                        "0,0,0".to_owned()
+                    ],
+                ]
+            )
+        }
+        std::fs::remove_file(fname).unwrap();
+    }
 }
