@@ -5,16 +5,37 @@ Simulate a misassembly for a given fasta.
   <tr>
     <td>
       <figure float="left">
-        <img align="middle" src="docs/imgs/HG00171_chr9_haplotype2-0000142:88082882-90122460_original.png" width="100%">
-        <figcaption>Original</figcaption>
+        <img align="middle" src="docs/imgs/chr16_MATERNAL_40000000-45000000_original.png" width="100%">
+        <figcaption>Original <a href="https://github.com/logsdon-lab/NucFlag"><code>nucflag</code></a> plot</figcaption>
       </figure>
       <figure float="left">
-        <img align="middle" src="docs/imgs/HG00171_chr9_haplotype2-0000142:88082882-90122460_misjoin.png" width="100%">
-        <figcaption>After misjoin of 5000 bp</figcaption>
+        <img align="middle" src="docs/imgs/chr16_MATERNAL_40000000-45000000.png" width="100%">
+        <figcaption>After introducing multiple misjoins</figcaption>
       </figure>
     </td>
   </tr>
 </table>
+
+```bash
+# Delete 10 kbp of sequence and join the sequences (misjoin).
+# Apply to every unique sequence in the assembly.
+echo '[{"mtype": "misjoin", "number": 100, "length": 10000}]' > 10100.json
+misasim multiple \
+  --path 10100.json \
+  --seed 10100 \
+  --infile hg002v1.1.fasta.gz \
+  --outfile hg002v1.1_misassembled.fa \
+  --group-by "^(.*?)_(.*?)$" \
+  --outbedfile regions.bed
+```
+
+```
+chrom_og	chrom_og_st	chrom_og_end	name	score	strand	chrom_new_st	chrom_new_end	item_rgb
+chr16_MATERNAL	41689710	41699710	misjoin	0	.	41259710	41259710	255,0,0
+chr16_MATERNAL	42259214	42269214	misjoin	0	.	41819214	41819214	255,0,0
+chr16_MATERNAL	43191922	43201922	misjoin	0	.	42741922	42741922	255,0,0
+chr16_MATERNAL	43699445	43709445	misjoin	0	.	43239445	43239445	255,0,0
+```
 
 ### Getting Started
 Install [Rust](https://www.rust-lang.org/tools/install).

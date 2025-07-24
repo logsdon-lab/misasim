@@ -23,3 +23,5 @@ repos:
         types: [file, rust]
         entry: cargo clippy -- -D warnings
         pass_filenames: false
+
+exclude: .*.png
